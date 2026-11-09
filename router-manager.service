@@ -1,0 +1,20 @@
+[Unit]
+Description=Router Manager Web Interface
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/usr/local/lib/router-manager
+ExecStart=/usr/bin/python3 -u /usr/local/lib/router-manager/app.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
