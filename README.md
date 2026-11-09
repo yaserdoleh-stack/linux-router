@@ -146,4 +146,6 @@ Issues and pull requests are welcome. When reporting a bug, include the Linux di
 
 ## License
 
-No license has been specified yet. Add a `LICENSE` file before publishing if you want to define reuse and contribution terms.
+Router Manager is licensed under the **GNU General Public License version 3 or (at your option) any later version** (`GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full GNU GPLv3 text.
+
+You may use, modify, and redistribute this software under the terms of the GNU GPL, provided you comply with its conditions, including applicable source-code and license-notice obligations. This software is provided **without warranty**, as described in the license.
