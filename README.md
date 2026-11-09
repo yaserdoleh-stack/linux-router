@@ -13,6 +13,7 @@ A web-based management interface for a Linux router, built with **FastAPI** and 
 - **Firewall:** Inspect nftables chains and rules; configure source NAT (by IPv4 CIDR or incoming interface) and TCP/UDP port forwarding.
 - **Configuration management:** Save pending changes, apply or undo them, and download/restore `config.json` backups.
 - **System controls:** Reboot and shut down the router from the web interface.
+- **Administrator login:** Password-protected UI and API, signed session cookies, and a sign-out action.
 
 ## Requirements
 
@@ -43,7 +44,15 @@ cd router-manager-usr-local-port80  # or the directory containing the extracted 
 sudo bash install-router-manager-local.sh
 ```
 
-The installer expects `app.py`, `index.html`, and `router-manager.service` in the **same directory** as the installation script. If the ZIP extracts directly into your current directory, run the script there instead.
+The installer expects `app.py`, `auth.py`, `setup-admin.py`, `login.html`, `index.html`, and `router-manager.service` in the **same directory** as the installation script. If the ZIP extracts directly into your current directory, run the script there instead.
+
+The installer prompts for an administrator password (minimum 12 characters) on first installation. The login username is `admin`. To change the password and invalidate all active sessions:
+
+```bash
+sudo python3 /usr/local/lib/router-manager/setup-admin.py
+```
+
+Authentication configuration is stored at `/var/lib/router-manager/auth.json` with restricted permissions. **Do not commit this file to GitHub.**
 
 Open the web interface at:
 
@@ -80,6 +89,7 @@ Stop the systemd service first if it is already using port 80.
 | `/usr/local/lib/router-manager/index.html` | Web UI |
 | `/etc/systemd/system/router-manager.service` | systemd startup service |
 | `/var/lib/router-manager/config.json` | Applied configuration and pending draft |
+| `/var/lib/router-manager/auth.json` | Administrator password hash and signing secret (private) |
 | `/etc/systemd/network/` | systemd-networkd configuration |
 | `/etc/kea/kea-dhcp4.conf` | Kea DHCPv4 configuration |
 | `/etc/nftables.conf` | Main nftables configuration |
@@ -100,7 +110,7 @@ Configuration restore is staged first; it is not applied until **Apply Changes**
 
 ## Security
 
-**Do not expose this application to the public internet.** The current service runs as root and serves unencrypted HTTP on port 80. The project does not provide a hardened authentication and authorization layer for administrative operations.
+**Do not expose this application to the public internet.** Login authentication is now required for the UI and API, but the service still runs as root and uses **unencrypted HTTP on port 80**. Passwords and session cookies are not protected against interception on the network. Use HTTPS through a reverse proxy or a VPN, and restrict access to a trusted management network.
 
 Recommended precautions:
 

@@ -1156,6 +1156,7 @@
             <div class="muted" style="margin-top:10px;font-size:12px">Restore stages the uploaded config.json. No system settings change until you press Apply Changes. Undo Changes discards the restore.</div>
             <button class="btn" style="margin-left:8px" onclick="requestSystemPower('reboot')">Reboot</button>
             <button class="btn danger" style="margin-left:8px" onclick="requestSystemPower('shutdown')">Shutdown</button>
+            <button class="btn" style="margin-left:8px" onclick="logoutRouter()">Sign out</button>
           </div>
         </div>
       </div>
@@ -1196,6 +1197,7 @@
     ...options
   }).then(async response => {
     const data = await response.json().catch(() => ({}));
+    if (response.status === 401) { window.location.replace('/login'); throw new Error('Authentication required'); }
     if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
     return data;
   });
@@ -2014,6 +2016,11 @@
     table.querySelectorAll("tbody tr").forEach(row => {
       row.style.display = row.innerText.toLowerCase().includes(value) ? "" : "none";
     });
+  }
+
+  async function logoutRouter() {
+    try { await fetch('/api/auth/logout', {method: 'POST', credentials: 'same-origin'}); }
+    finally { window.location.replace('/login'); }
   }
 
   async function requestSystemPower(action) {

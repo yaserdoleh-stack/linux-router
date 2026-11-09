@@ -15,22 +15,75 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Body
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+from auth import COOKIE, read_auth, verify_password, issue_session, valid_session
+from collections import defaultdict, deque
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Linux Router Manager API", version="1.0.0")
 
-# For production, serve index.html from the same origin and remove broad CORS.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Same-origin only: router administration must not be callable from other websites.
+LOGIN_ATTEMPTS = defaultdict(deque)
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path not in ('/login', '/api/auth/login'):
+        if not valid_session(request.cookies.get(COOKIE, '')):
+            if path == '/' or not path.startswith('/api/'):
+                return RedirectResponse('/login', status_code=303)
+            return JSONResponse({'detail': 'Authentication required'}, status_code=401)
+    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        origin = request.headers.get('origin')
+        referer = request.headers.get('referer')
+        host = request.headers.get('host', '')
+        if origin and origin not in (f'http://{host}', f'https://{host}'):
+            return JSONResponse({'detail': 'Cross-origin requests are forbidden'}, status_code=403)
+        if not origin and referer and not (referer.startswith(f'http://{host}/') or referer.startswith(f'https://{host}/')):
+            return JSONResponse({'detail': 'Cross-origin requests are forbidden'}, status_code=403)
+        if not origin and not referer and path != '/api/auth/login':
+            return JSONResponse({'detail': 'Origin or Referer required'}, status_code=403)
+    response = await call_next(request)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'same-origin'
+    return response
+
+@app.get('/login', include_in_schema=False)
+async def login_page():
+    return FileResponse(Path(__file__).parent / 'login.html')
+
+@app.post('/api/auth/login', include_in_schema=False)
+async def login(request: Request):
+    key = request.client.host if request.client else 'unknown'
+    now = time.monotonic()
+    attempts = LOGIN_ATTEMPTS[key]
+    while attempts and attempts[0] < now - 900:
+        attempts.popleft()
+    if len(attempts) >= 10:
+        return JSONResponse({'detail': 'Too many login attempts'}, status_code=429)
+    try:
+        payload = await request.json()
+        username, password = payload.get('username'), payload.get('password')
+    except (ValueError, AttributeError, TypeError):
+        return JSONResponse({'detail': 'Invalid request'}, status_code=400)
+    if username != 'admin' or not verify_password(password):
+        attempts.append(now)
+        return JSONResponse({'detail': 'Invalid credentials'}, status_code=401)
+    attempts.clear()
+    response = JSONResponse({'ok': True})
+    response.set_cookie(COOKIE, issue_session(), max_age=28800, httponly=True,
+                        samesite='strict', secure=request.url.scheme == 'https', path='/')
+    return response
+
+@app.post('/api/auth/logout', include_in_schema=False)
+async def logout():
+    response = JSONResponse({'ok': True})
+    response.delete_cookie(COOKIE, path='/')
+    return response
 
 
 class InterfaceUpdate(BaseModel):
