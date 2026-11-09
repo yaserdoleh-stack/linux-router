@@ -1,0 +1,2062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Router Manager</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #111a2b;
+    --panel-2: #172238;
+    --border: #26344d;
+    --text: #e7edf7;
+    --muted: #91a0b8;
+    --accent: #4f8cff;
+    --accent-2: #72a4ff;
+    --green: #32c787;
+    --yellow: #f2c94c;
+    --red: #ff6678;
+    --shadow: 0 12px 30px rgba(0,0,0,.22);
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  button, input, select {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  .app {
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 250px;
+    flex: 0 0 250px;
+    background: #0e1728;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .brand {
+    height: 72px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: var(--accent);
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    color: white;
+  }
+
+  .brand strong {
+    display: block;
+    font-size: 15px;
+  }
+
+  .brand small {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .nav {
+    padding: 14px 10px;
+    overflow-y: auto;
+  }
+
+  .nav-section {
+    color: #65738c;
+    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    padding: 12px 12px 7px;
+  }
+
+  .nav-item {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #aebbd0;
+    text-align: left;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    transition: .15s ease;
+  }
+
+  .nav-item:hover {
+    background: #172238;
+    color: white;
+  }
+
+  .nav-item.active {
+    background: rgba(79,140,255,.16);
+    color: #dce8ff;
+  }
+
+  .nav-icon {
+    width: 20px;
+    text-align: center;
+    opacity: .9;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .router-status {
+    background: #131f33;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 12px;
+  }
+
+  .status-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(50,199,135,.55);
+  }
+
+  .router-status small {
+    display: block;
+    color: var(--muted);
+    margin-top: 5px;
+    font-size: 11px;
+  }
+
+  /* Main */
+  .main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .topbar {
+    height: 72px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 26px;
+    background: rgba(14,23,40,.85);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+
+  .page-title h1 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .page-title p {
+    margin: 3px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .top-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .pending-bar {
+    display: none;
+    margin: 14px 24px 0;
+    padding: 12px 14px;
+    background: rgba(242, 201, 76, .08);
+    border: 1px solid rgba(242, 201, 76, .28);
+    border-radius: 10px;
+  }
+
+  .pending-bar.show { display: block; }
+
+  .pending-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .pending-title {
+    font-weight: 650;
+    color: var(--yellow);
+  }
+
+  .pending-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: 9px;
+  }
+
+  .pending-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 7px;
+    background: rgba(255,255,255,.035);
+    border: 1px solid rgba(255,255,255,.07);
+    font-size: 11px;
+  }
+
+  .pending-action {
+    text-transform: uppercase;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .05em;
+  }
+
+  .pending-action.added { color: var(--green); }
+  .pending-action.modified { color: var(--yellow); }
+  .pending-action.deleted { color: var(--red); }
+
+  .pending-empty { color: var(--muted); font-size: 11px; }
+
+  .btn.danger {
+    border-color: rgba(235, 87, 87, .35);
+    color: var(--red);
+  }
+
+  .btn.danger:hover {
+    background: rgba(235, 87, 87, .10);
+  }
+
+  .btn {
+    border: 1px solid var(--border);
+    color: var(--text);
+    background: #162238;
+    border-radius: 8px;
+    padding: 8px 13px;
+  }
+
+  .btn:hover {
+    background: #1c2b45;
+  }
+
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+  }
+
+  .btn.primary:hover {
+    background: #407ff0;
+  }
+
+  .btn.danger {
+    color: #ff9aa6;
+    border-color: rgba(255,102,120,.3);
+  }
+
+  .content {
+    padding: 24px 26px 40px;
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .page {
+    display: none;
+  }
+
+  .page.active {
+    display: block;
+    animation: fade .16s ease;
+  }
+
+  @keyframes fade {
+    from { opacity: .3; transform: translateY(2px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Cards */
+  .grid {
+    display: grid;
+    gap: 16px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(4, minmax(0,1fr));
+    margin-bottom: 20px;
+  }
+
+  .two-col {
+    grid-template-columns: 1.5fr 1fr;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+  }
+
+  .stat {
+    padding: 18px;
+  }
+
+  .stat-label {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    margin-top: 8px;
+  }
+
+  .stat-sub {
+    margin-top: 7px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .positive { color: var(--green); }
+  .warning { color: var(--yellow); }
+  .negative { color: var(--red); }
+
+  .card-header {
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .card-header h2, .card-header h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .card-header span {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .card-body {
+    padding: 18px;
+  }
+
+  /* Traffic */
+  .traffic {
+    height: 230px;
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(to bottom, transparent 24%, rgba(255,255,255,.045) 25%, transparent 26%),
+      linear-gradient(to bottom, transparent 49%, rgba(255,255,255,.045) 50%, transparent 51%),
+      linear-gradient(to bottom, transparent 74%, rgba(255,255,255,.045) 75%, transparent 76%);
+  }
+
+  .traffic-grid {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      to right,
+      transparent 0,
+      transparent 11.9%,
+      rgba(255,255,255,.035) 12%,
+      transparent 12.1%
+    );
+  }
+
+  .traffic-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    border-radius: 2px;
+  }
+
+  .traffic-line.down {
+    top: 54%;
+    background: linear-gradient(90deg, transparent, var(--accent), #7eb0ff, transparent);
+    transform: rotate(-3deg);
+  }
+
+  .traffic-line.up {
+    top: 67%;
+    background: linear-gradient(90deg, transparent, var(--green), #70e4b5, transparent);
+    transform: rotate(2deg);
+  }
+
+  .traffic-legend {
+    display: flex;
+    gap: 20px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 7px;
+    height: 7px;
+    display: inline-block;
+    border-radius: 50%;
+    margin-right: 5px;
+    background: var(--accent);
+  }
+
+  .legend-dot.up { background: var(--green); }
+
+  /* Interface rows */
+  .interface-row {
+    display: grid;
+    grid-template-columns: 1.2fr .8fr .8fr .8fr;
+    align-items: center;
+    padding: 13px 0;
+    border-bottom: 1px solid rgba(38,52,77,.7);
+    font-size: 12px;
+  }
+
+  .interface-row:last-child {
+    border-bottom: 0;
+  }
+
+  .iface-name {
+    font-weight: 650;
+  }
+
+  .iface-meta {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 3px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    gap: 6px;
+    border-radius: 999px;
+    padding: 4px 8px;
+    font-size: 10px;
+    font-weight: 650;
+  }
+
+  .badge.up {
+    background: rgba(50,199,135,.11);
+    color: #70e4b5;
+  }
+
+  .badge.down {
+    background: rgba(255,102,120,.1);
+    color: #ff9aa6;
+  }
+
+  .badge.warn {
+    background: rgba(242,201,76,.1);
+    color: #f6d969;
+  }
+
+  /* Tables */
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  th, td {
+    text-align: left;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(38,52,77,.75);
+    white-space: nowrap;
+  }
+
+  th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+
+  tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* Page controls */
+  .toolbar {
+    display: flex;
+    gap: 9px;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .toolbar-left, .toolbar-right {
+    display: flex;
+    gap: 9px;
+    align-items: center;
+  }
+
+  .input, select {
+    background: #121d30;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    outline: none;
+  }
+
+  .input:focus, select:focus {
+    border-color: var(--accent);
+  }
+
+  /* Forms */
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0,1fr));
+    gap: 15px;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .form-group.full {
+    grid-column: 1 / -1;
+  }
+
+  label {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .switch-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(38,52,77,.7);
+  }
+
+  .switch-row:last-child { border-bottom: 0; }
+
+  .switch {
+    width: 40px;
+    height: 22px;
+    border-radius: 99px;
+    background: #2a3850;
+    position: relative;
+    border: 0;
+    padding: 0;
+  }
+
+  .switch::after {
+    content: "";
+    width: 16px;
+    height: 16px;
+    background: #a9b5c7;
+    border-radius: 50%;
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    transition: .15s;
+  }
+
+  .switch.on {
+    background: var(--accent);
+  }
+
+  .switch.on::after {
+    left: 21px;
+    background: white;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    background: #172238;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 12px 15px;
+    box-shadow: var(--shadow);
+    opacity: 0;
+    transform: translateY(10px);
+    pointer-events: none;
+    transition: .2s;
+    font-size: 12px;
+    z-index: 20;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Responsive */
+  @media (max-width: 1050px) {
+    .stats-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .two-col { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 760px) {
+    .sidebar {
+      width: 64px;
+      flex-basis: 64px;
+    }
+    .brand {
+      justify-content: center;
+      padding: 0;
+    }
+    .brand-text, .nav-section, .nav-label, .sidebar-footer {
+      display: none;
+    }
+    .nav-item {
+      justify-content: center;
+      padding: 11px 0;
+    }
+    .content { padding: 18px 14px 30px; }
+    .topbar { padding: 0 14px; }
+    .top-actions .btn:not(.primary) { display: none; }
+    .stats-grid { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+    .interface-row {
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+    }
+  }
+
+.interface-groups { display:grid; gap:18px; }
+.interface-group .card-header { align-items:center; }
+.interface-group .group-count { min-width:28px; text-align:center; }
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}.modal-backdrop.show{display:flex}.modal{width:min(620px,100%);max-height:90vh;overflow:auto;background:var(--panel,#111827);border:1px solid var(--border,#273244);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.modal-header h2{margin:0 0 4px}.modal-header span{color:var(--muted,#94a3b8);font-size:12px}.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.danger{border-color:#7f1d1d!important}.form-help{font-size:12px;color:var(--muted,#94a3b8);margin-top:-6px;margin-bottom:8px}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">R</div>
+      <div class="brand-text">
+        <strong>Linux Router</strong>
+        <small>Router Manager 1.0</small>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-section">Monitor</div>
+      <button class="nav-item active" data-page="dashboard">
+        <span class="nav-icon">⌂</span><span class="nav-label">Dashboard</span>
+      </button>
+      <div class="nav-section">Network</div>
+      <button class="nav-item" data-page="interfaces">
+        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span>
+      </button>
+      <button class="nav-item" data-page="wireless">
+        <span class="nav-icon">◉</span><span class="nav-label">Wireless</span>
+      </button>
+      <button class="nav-item" data-page="bridges">
+        <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
+      </button>
+      <button class="nav-item" data-page="vlans">
+        <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
+      </button>
+      <button class="nav-item" data-page="firewall">
+        <span class="nav-icon">◈</span><span class="nav-label">Firewall</span>
+      </button>
+      <button class="nav-item" data-page="routing">
+        <span class="nav-icon">↝</span><span class="nav-label">Routing</span>
+      </button>
+      <button class="nav-item" data-page="dhcp">
+        <span class="nav-icon">▣</span><span class="nav-label">DHCP</span>
+      </button>
+      <button class="nav-item" data-page="dns">
+        <span class="nav-icon">⌁</span><span class="nav-label">DNS</span>
+      </button>
+      <button class="nav-item" data-page="vpn">
+        <span class="nav-icon">⌁</span><span class="nav-label">VPN</span>
+      </button>
+
+      <div class="nav-section">System</div>
+      <button class="nav-item" data-page="logs">
+        <span class="nav-icon">≡</span><span class="nav-label">Logs</span>
+      </button>
+      <button class="nav-item" data-page="system">
+        <span class="nav-icon">⚙</span><span class="nav-label">System</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="router-status">
+        <div class="status-line"><span class="dot"></span> Router online</div>
+        <small>gateway3 · Linux</small>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="page-title">
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="pageSubtitle">Router overview and live network status</p>
+      </div>
+      <div class="top-actions">
+        <button class="btn" onclick="refreshCurrentPage()">↻ Refresh</button>
+        <button class="btn primary" id="applyChangesButton" onclick="applyChanges()">Apply Changes</button>
+      </div>
+    </header>
+
+    <div class="pending-bar" id="pendingChangesBar">
+      <div class="pending-head">
+        <div><span class="pending-title" id="pendingChangesTitle">Unapplied changes</span> <span class="muted" id="pendingChangesSummary"></span></div>
+        <div class="top-actions">
+          <button class="btn" onclick="loadConfigStatus()">↻ Refresh</button>
+          <button class="btn danger" id="discardChangesButton" onclick="discardChanges()">Undo Changes</button>
+        </div>
+      </div>
+      <div class="pending-list" id="pendingChangesList"></div>
+    </div>
+
+    <section class="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div class="grid stats-grid">
+          <div class="card stat">
+            <div class="stat-label">Internet</div>
+            <div class="stat-value" id="dashboardInternet">—</div>
+            <div class="stat-sub" id="dashboardInternetSub">WAN status</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-label">WAN Address</div>
+            <div class="stat-value mono" id="dashboardWanAddress" style="font-size:20px">—</div>
+            <div class="stat-sub">Live kernel interface data</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-label">LAN Clients</div>
+            <div class="stat-value" id="dashboardClients">—</div>
+            <div class="stat-sub">Active ARP/neighbor entries on lan0</div>
+          </div>
+          <div class="card stat">
+            <div class="stat-label">CPU Load</div>
+            <div class="stat-value" id="dashboardCpu">—</div>
+            <div class="stat-sub" id="dashboardSystemSub">Live /proc/stat</div>
+          </div>
+        </div>
+
+        <div class="grid two-col">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h2>WAN Traffic</h2>
+                <span>Last 60 seconds</span>
+              </div>
+              <span class="mono" id="dashboardTrafficSummary">Live interface counters</span>
+            </div>
+            <div class="card-body">
+              <div class="traffic">
+                <div class="traffic-grid"></div>
+                <div class="traffic-line down"></div>
+                <div class="traffic-line up"></div>
+              </div>
+              <div class="traffic-legend">
+                <span><i class="legend-dot"></i>Download</span>
+                <span><i class="legend-dot up"></i>Upload</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div><h2>Interfaces</h2><span>Live Linux kernel interfaces</span></div>
+              <span id="dashboardInterfaceCount">0</span>
+            </div>
+            <div class="card-body" id="dashboardInterfaces">
+              <div class="iface-meta">Loading interface data…</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-header">
+            <h2>Recent Events</h2>
+            <span>Today</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Time</th><th>Event</th><th>Source</th><th>Status</th></tr></thead>
+              <tbody id="dashboardEvents">
+                <tr><td colspan="4" class="mono">Loading system journal…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- INTERFACES -->
+      <div class="page" id="page-interfaces">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <button class="btn" onclick="loadInterfaces()">↻ Refresh</button>
+          </div>
+          <div class="toolbar-right">
+            <input class="input" placeholder="Search interfaces..." oninput="filterInterfaceGroups(this.value)">
+          </div>
+        </div>
+
+        <div id="interfacesGroups" class="interface-groups">
+          <div class="card interface-group" data-category="ethernet">
+            <div class="card-header"><div><h2>Ethernet</h2><span>Physical wired interfaces</span></div><span class="group-count">0</span></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Status</th><th>Address</th><th>Speed</th><th>MTU</th><th>Firewall</th><th>Actions</th></tr></thead><tbody></tbody></table></div>
+          </div>
+
+          <div class="card interface-group" data-category="other">
+            <div class="card-header"><div><h2>Other</h2><span>Loopback, tunnels and other virtual interfaces</span></div><span class="group-count">0</span></div>
+            <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Address</th><th>MTU</th><th>Firewall</th><th>Actions</th></tr></thead><tbody></tbody></table></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROUTING -->
+      <div class="page" id="page-routing">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn primary" onclick="openRouteModal()">+ Add Static Route</button></div>
+          <div class="toolbar-right"><button class="btn" onclick="loadRoutes()">↻ Refresh</button></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div><h2>Routing Table</h2><span>Live kernel routes. Static route edits remain pending until Apply Changes.</span></div><span class="badge" id="routeStatus">Loading…</span></div>
+          <div class="table-wrap">
+            <table id="routingTable">
+              <thead><tr><th>Destination</th><th>Gateway</th><th>Interface</th><th>Metric</th><th>Protocol</th><th>Status</th><th>Action</th></tr></thead>
+              <tbody id="routingTableBody"><tr><td colspan="7" class="muted">Loading routes…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="muted" style="margin:12px 4px;font-size:12px">Connected, DHCP, and kernel routes are read-only. Only static routes can be added or removed here. Changes are saved to the pending JSON configuration and do not affect traffic until applied. When applied, static routes are written into the matching systemd-networkd .network files and restored automatically by systemd-networkd after reboot.</p>
+      </div>
+
+      <!-- FIREWALL -->
+      <div class="page" id="page-firewall">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn" onclick="loadFirewall()">↻ Refresh</button></div>
+          <div class="toolbar-right"><span class="badge" id="firewallStatus">Loading…</span></div>
+        </div>
+      <!-- FIREWALL CONFIGURATION -->
+      <div class="card" id="firewall-nat">
+        <div class="card-header"><div><h2>Source NAT (Masquerade)</h2><span>Translate LAN source addresses to the outgoing interface address</span></div><button class="btn" onclick="addFwRow('nat')">+ Add NAT</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Source Type</th><th>Source CIDR / Incoming Interface</th><th>Outgoing Interface</th><th>Action</th></tr></thead><tbody id="fwNatRows"></tbody></table></div>
+        <div style="padding:16px"><button class="btn primary" onclick="saveFirewallDraft()">Save Firewall Draft</button></div>
+      </div>
+      <div class="card" id="firewall-pat">
+        <div class="card-header"><div><h2>Port Forwarding</h2><span>Forward incoming TCP/UDP ports to an internal IPv4 address</span></div><button class="btn" onclick="addFwRow('pat')">+ Add Port Forward</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Incoming Interface</th><th>Protocol</th><th>External Port</th><th>Internal IP</th><th>Internal Port</th><th>Action</th></tr></thead><tbody id="fwPatRows"></tbody></table></div>
+        <div style="padding:16px"><button class="btn primary" onclick="saveFirewallDraft()">Save Firewall Draft</button></div>
+      </div>
+
+        <div class="grid two-col">
+          <div class="card">
+            <div class="card-header"><div><h2>nftables Chains</h2><span>Live chain configuration</span></div><span id="firewallChainCount">0 chains</span></div>
+            <div class="table-wrap">
+              <table id="firewallChainsTable">
+                <thead><tr><th>Table</th><th>Chain</th><th>Type</th><th>Hook</th><th>Policy</th></tr></thead>
+                <tbody><tr><td colspan="5" class="mono">Loading nftables chains…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><div><h2>nftables Rules</h2><span>Live ruleset</span></div><span id="firewallRuleCount">0 rules</span></div>
+            <div class="table-wrap">
+              <table id="firewallTable">
+                <thead><tr><th>Table</th><th>Chain</th><th>Type</th><th>Rule</th><th>Handle</th></tr></thead>
+                <tbody><tr><td colspan="5" class="mono">Loading nftables rules…</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DHCP -->
+      <div class="page" id="page-dhcp">
+        <div class="grid two-col">
+          <div class="card">
+            <div class="card-header">
+              <div><h2>Kea DHCPv4 Server</h2><span>Configuration is staged in JSON; Apply Changes activates it</span></div>
+              <span class="badge" id="keaStatus">Checking…</span>
+            </div>
+            <div class="card-body">
+              <div class="switch-row" style="margin:0 0 16px">
+                <div><strong style="font-size:13px">Enable DHCP server</strong><div class="iface-meta" id="keaServiceInfo">Kea DHCPv4 service status</div></div>
+                <label style="display:flex;align-items:center;gap:8px;font-size:12px"><input type="checkbox" id="keaEnabled"> Enabled</label>
+              </div>
+              <form id="keaDhcpForm" onsubmit="stageDhcpConfig(event)">
+                <div class="form-grid">
+                  <div class="form-group full"><label for="keaInterface">Listen interface</label><select class="input" id="keaInterface" required></select><div class="form-help">Select the LAN-facing interface that should receive DHCP requests.</div></div>
+                  <div class="form-group"><label for="keaSubnet">IPv4 subnet / CIDR</label><input class="input" id="keaSubnet" placeholder="192.168.1.0/24"></div>
+                  <div class="form-group"><label for="keaRouter">Default gateway</label><input class="input" id="keaRouter" placeholder="192.168.1.1"></div>
+                  <div class="form-group"><label for="keaPoolStart">Pool start</label><input class="input" id="keaPoolStart" placeholder="192.168.1.100"></div>
+                  <div class="form-group"><label for="keaPoolEnd">Pool end</label><input class="input" id="keaPoolEnd" placeholder="192.168.1.200"></div>
+                  <div class="form-group full"><label>DHCP DNS servers (up to 3)</label>
+                    <div class="form-grid">
+                      <div class="form-group"><label for="keaDns1">Primary DNS</label><input class="input" id="keaDns1" placeholder="192.168.1.1" inputmode="decimal"></div>
+                      <div class="form-group"><label for="keaDns2">Secondary DNS</label><input class="input" id="keaDns2" placeholder="1.1.1.1" inputmode="decimal"></div>
+                      <div class="form-group"><label for="keaDns3">Tertiary DNS</label><input class="input" id="keaDns3" placeholder="8.8.8.8" inputmode="decimal"></div>
+                    </div><div class="form-help">Optional IPv4 DNS servers, advertised to DHCP clients in the entered order. Leave unused fields blank.</div></div>
+                  <div class="form-group"><label for="keaDomain">Domain name (optional)</label><input class="input" id="keaDomain" placeholder="home.arpa"></div>
+                  <div class="form-group"><label for="keaLease">Lease time (seconds)</label><input class="input" id="keaLease" type="number" min="300" max="604800" step="60" value="86400" required><div class="form-help">300 seconds to 604800 seconds (7 days).</div></div>
+                </div>
+                <div style="margin-top:18px">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px">
+                    <div><strong>IP address reservations</strong><div class="muted" style="font-size:12px">Bind an IPv4 address to a device MAC address. Use addresses outside the dynamic pool.</div></div>
+                    <button type="button" class="btn" onclick="addDhcpReservation()">+ Add reservation</button>
+                  </div>
+                  <div class="table-wrap"><table><thead><tr><th>MAC address</th><th>Reserved IPv4</th><th>Hostname (optional)</th><th></th></tr></thead><tbody id="keaReservationsBody"></tbody></table></div>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap">
+                  <button type="submit" class="btn primary">Save DHCP Draft</button>
+                  <button type="button" class="btn" onclick="loadDhcp()">↻ Reload</button>
+                  <span class="muted" id="keaDraftInfo" style="font-size:12px">Not yet saved</span>
+                </div>
+              </form>
+              <p class="muted" style="font-size:12px;margin:14px 0 0">Saving updates the <code>pending</code> section in <code>/var/lib/router-manager/config.json</code>. The Apply Changes button validates the configuration with <code>kea-dhcp4 -t</code>, writes <code>/etc/kea/kea-dhcp4.conf</code>, and enables/restarts the Kea service. Undo Changes removes the pending section without changing the applied configuration. Disable any other DHCP server (such as dnsmasq DHCP) on this LAN first; multiple DHCP servers can issue conflicting leases.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><div><h2>Active DHCP Leases</h2><span>Kea memfile lease database</span></div><span class="badge" id="keaLeaseCount">0 leases</span></div>
+            <div class="table-wrap">
+              <table id="keaLeasesTable">
+                <thead><tr><th>Address</th><th>MAC</th><th>Hostname</th><th>Remaining</th></tr></thead>
+                <tbody><tr><td colspan="4" class="mono">Loading Kea leases…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="card-body"><div class="muted" id="keaLeaseInfo" style="font-size:12px">Leases are read from /var/lib/kea/kea-leases4.csv.</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DNS -->
+      <div class="page" id="page-dns">
+        <div class="grid two-col">
+          <div class="card">
+            <div class="card-header"><h2>DNS Resolver</h2><span>dnsmasq</span></div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="form-group full"><label>Upstream DNS servers</label><input class="input" value="1.1.1.1, 8.8.8.8"></div>
+                <div class="form-group"><label>Local domain</label><input class="input" value="lan"></div>
+                <div class="form-group"><label>Cache size</label><input class="input" value="1000"></div>
+              </div>
+              <div class="switch-row" style="margin-top:14px">
+                <div><strong style="font-size:13px">DNS caching</strong><div class="iface-meta">Cache repeated queries locally</div></div>
+                <button class="switch on" onclick="toggleSwitch(this)"></button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2>DNS Statistics</h2><span>Last hour</span></div>
+            <div class="card-body">
+              <div class="stat-value">12,481</div>
+              <div class="stat-sub">Queries</div>
+              <div style="margin-top:22px" class="positive">91.4% cache hit rate</div>
+              <div style="margin-top:8px" class="stat-sub">1,074 upstream requests</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WIRELESS -->
+      <div class="page" id="page-wireless">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn" onclick="loadWireless()">↻ Refresh</button></div>
+          <div class="toolbar-right"><input class="input" placeholder="Search wireless interfaces..." oninput="filterTable(this.value,'wirelessTable')"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div><h2>Wireless Interfaces</h2><span>Live Wi-Fi interfaces detected by Linux</span></div><span id="wirelessStatus">Loading…</span></div>
+          <div class="table-wrap">
+            <table id="wirelessTable">
+              <thead><tr><th>Interface</th><th>Status</th><th>Address</th><th>Speed</th><th>MTU</th><th>Actions</th></tr></thead>
+              <tbody><tr><td colspan="6" class="mono">Loading wireless data…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- BRIDGES -->
+      <div class="page" id="page-bridges">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn primary" onclick="openAddDialog('bridge')">+ Add Bridge</button><button class="btn" onclick="loadBridges()">↻ Refresh</button></div>
+          <div class="toolbar-right"><input class="input" placeholder="Search bridges..." oninput="filterTable(this.value,'bridgesTable')"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div><h2>Linux Bridges</h2><span>Live bridge devices and member interfaces</span></div><span id="bridgesStatus">Loading…</span></div>
+          <div class="table-wrap">
+            <table id="bridgesTable">
+              <thead><tr><th>Bridge</th><th>Status</th><th>Address</th><th>Members</th><th>STP</th><th>MTU</th><th>Firewall</th><th>Actions</th></tr></thead>
+              <tbody><tr><td colspan="8" class="mono">Loading bridge data…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- VLAN -->
+      <div class="page" id="page-vlans">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn primary" onclick="openAddDialog('vlan')">+ Add VLAN</button><button class="btn" onclick="loadVlans()">↻ Refresh</button></div>
+          <div class="toolbar-right"><input class="input" placeholder="Search VLANs..." oninput="filterTable(this.value,'vlansTable')"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div><h2>VLANs</h2><span>Live 802.1Q interfaces from the Linux kernel</span></div><span id="vlansStatus">Loading…</span></div>
+          <div class="table-wrap">
+            <table id="vlansTable">
+              <thead><tr><th>Interface</th><th>VLAN ID</th><th>Parent</th><th>Status</th><th>Address</th><th>MTU</th><th>Firewall</th><th>Actions</th></tr></thead>
+              <tbody><tr><td colspan="8" class="mono">Loading VLAN data…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- VPN -->
+      <div class="page" id="page-vpn">
+        <div class="toolbar">
+          <div class="toolbar-left"><button class="btn primary" onclick="showToast('WireGuard peer editor would open here')">+ Add Peer</button></div>
+          <div class="toolbar-right"><span class="badge warn">WireGuard configured</span></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>WireGuard</h2><span>wg0</span></div>
+          <div class="card-body">
+            <div class="form-grid">
+              <div class="form-group"><label>Interface address</label><input class="input" value="10.10.0.1/24"></div>
+              <div class="form-group"><label>Listen port</label><input class="input" value="51820"></div>
+              <div class="form-group full"><label>Public key</label><input class="input mono" value="J7f6mWk9Qx2vK2v4r9mP0xExampleKeyOnly"></div>
+            </div>
+            <div class="switch-row" style="margin-top:14px">
+              <div><strong style="font-size:13px">WireGuard enabled</strong><div class="iface-meta">wg0 interface</div></div>
+              <button class="switch on" onclick="toggleSwitch(this)"></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- LOGS -->
+      <div class="page" id="page-logs">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <select id="logLevel">
+              <option>All levels</option>
+              <option>Info</option>
+              <option>Warning</option>
+              <option>Error</option>
+            </select>
+            <select>
+              <option>All services</option>
+              <option>kernel</option>
+              <option>systemd-networkd</option>
+              <option>nftables</option>
+              <option>dnsmasq</option>
+            </select>
+          </div>
+          <button class="btn" onclick="showToast('Logs refreshed')">↻ Refresh</button>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2>System Logs</h2><span id="logsStatus">journalctl</span></div>
+          <div class="card-body">
+            <div class="mono" id="logsOutput" style="font-size:11px; line-height:2; color:#aebbd0">
+              <div>Loading system journal…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SYSTEM -->
+      <div class="page" id="page-system">
+        <div class="grid two-col">
+          <div class="card">
+            <div class="card-header"><h2>System Information</h2><span>gateway3</span></div>
+            <div class="card-body">
+              <div class="interface-row"><div class="iface-name">Hostname</div><div class="mono">gateway3</div></div>
+              <div class="interface-row"><div class="iface-name">Operating system</div><div>Linux</div></div>
+              <div class="interface-row"><div class="iface-name">Kernel</div><div class="mono">6.8.0-router</div></div>
+              <div class="interface-row"><div class="iface-name">Uptime</div><div>8 days, 14 hours</div></div>
+              <div class="interface-row"><div class="iface-name">Architecture</div><div class="mono">x86_64</div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2>Services</h2><span>systemd</span></div>
+            <div class="card-body">
+              <div class="switch-row"><div><strong style="font-size:13px">systemd-networkd</strong></div><span class="badge up">RUNNING</span></div>
+              <div class="switch-row"><div><strong style="font-size:13px">nftables</strong></div><span class="badge up">RUNNING</span></div>
+              <div class="switch-row"><div><strong style="font-size:13px">dnsmasq</strong></div><span class="badge up">RUNNING</span></div>
+              <div class="switch-row"><div><strong style="font-size:13px">ssh</strong></div><span class="badge up">RUNNING</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-header"><h2>System Actions</h2><span>Use carefully</span></div>
+          <div class="card-body">
+            <button class="btn" onclick="downloadRouterConfig()">Download Configuration</button>
+            <button class="btn" onclick="document.getElementById('routerConfigUpload').click()">Restore Configuration</button>
+            <input id="routerConfigUpload" type="file" accept=".json,application/json" style="display:none" onchange="stageRouterConfigUpload(this)">
+            <div class="muted" style="margin-top:10px;font-size:12px">Restore stages the uploaded config.json. No system settings change until you press Apply Changes. Undo Changes discards the restore.</div>
+            <button class="btn" style="margin-left:8px" onclick="requestSystemPower('reboot')">Reboot</button>
+            <button class="btn danger" style="margin-left:8px" onclick="requestSystemPower('shutdown')">Shutdown</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<div id="configModal" class="modal-backdrop" onclick="if(event.target===this) closeConfigModal()">
+  <div class="modal">
+    <div class="modal-header"><div><h2 id="modalTitle">Edit</h2><span id="modalSubtitle">Linux network configuration</span></div><button type="button" class="btn" onclick="closeConfigModal()">×</button></div>
+    <form id="configForm" onsubmit="submitConfigForm(event)"><input type="hidden" id="configMode"><input type="hidden" id="configName"><div id="configFields" class="form-grid"></div><div class="modal-actions"><button type="button" class="btn" onclick="closeConfigModal()">Cancel</button><button type="submit" class="btn primary">Save</button></div></form>
+  </div>
+</div>
+<div id="routeModal" class="modal-backdrop" onclick="if(event.target===this) closeRouteModal()">
+  <div class="modal">
+    <div class="modal-header"><div><h2>Add Static Route</h2><span>Stage a route without changing the live routing table</span></div><button type="button" class="btn" onclick="closeRouteModal()">×</button></div>
+    <form onsubmit="saveStaticRoute(event)">
+      <div class="form-grid">
+        <label>Destination (CIDR or default)<input id="routeDestination" required placeholder="192.168.50.0/24"></label>
+        <label>Gateway (optional)<input id="routeGateway" placeholder="192.168.1.1"></label>
+        <label>Outgoing interface<select id="routeDevice"><option value="">Select interface</option></select></label>
+        <label>Metric<input id="routeMetric" type="number" min="0" max="4294967295" value="100"></label>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn" onclick="closeRouteModal()">Cancel</button><button type="submit" class="btn primary">Save Route</button></div>
+    </form>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  // FastAPI integration. Serve this file from the FastAPI static directory
+  // or set API_BASE to the router API origin.
+  const API_BASE = window.ROUTER_API_BASE || "";
+  const api = (path, options = {}) => fetch(API_BASE + path, {
+    credentials: "include",
+    headers: {"Content-Type": "application/json", ...(options.headers || {})},
+    ...options
+  }).then(async response => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+    return data;
+  });
+
+  async function loadDashboard() {
+    try {
+      const data = await api("/api/dashboard");
+      const internet = document.getElementById("dashboardInternet");
+      const internetSub = document.getElementById("dashboardInternetSub");
+      const wanAddress = document.getElementById("dashboardWanAddress");
+      const clients = document.getElementById("dashboardClients");
+      const cpu = document.getElementById("dashboardCpu");
+      const traffic = document.getElementById("dashboardTrafficSummary");
+
+      const connected = !!data.internet?.connected;
+      if (internet) {
+        internet.textContent = connected ? "Connected" : "Disconnected";
+        internet.className = "stat-value " + (connected ? "positive" : "negative");
+      }
+      if (internetSub) internetSub.textContent = connected ? "WAN interface is up" : "WAN interface is down";
+      if (wanAddress) wanAddress.textContent = data.internet?.address || "—";
+      if (clients) clients.textContent = data.clients ?? "—";
+      if (cpu) cpu.textContent = data.system?.cpu_percent != null ? `${data.system.cpu_percent}%` : "—";
+      if (traffic) traffic.textContent = `${formatBytes(data.traffic?.rx_bytes)} ↓ · ${formatBytes(data.traffic?.tx_bytes)} ↑`;
+
+      renderDashboardInterfaces(data.interfaces || []);
+      renderRecentEvents(data.recent_events || []);
+      renderInterfaces(data.interfaces || []);
+    } catch (err) {
+      showToast("Dashboard API error: " + err.message);
+    }
+  }
+
+  function formatBytes(value) {
+    if (value == null || Number.isNaN(Number(value))) return "—";
+    let n = Number(value);
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  }
+
+  function renderDashboardInterfaces(items) {
+    const body = document.getElementById("dashboardInterfaces");
+    const count = document.getElementById("dashboardInterfaceCount");
+    if (!body) return;
+    if (count) count.textContent = `${items.length} total`;
+    const labels = { ethernet: "Ethernet", wireless: "Wireless", bridges: "Bridges", vlans: "VLANs", other: "Other" };
+    const groups = { ethernet: [], wireless: [], bridges: [], vlans: [], other: [] };
+    items.forEach(i => (groups[i.category] || groups.other).push(i));
+    body.innerHTML = Object.entries(groups).filter(([, list]) => list.length).map(([key, list]) => `
+      <div class="dashboard-interface-group">
+        <div class="dashboard-interface-group-title">${labels[key]}<span>${list.length}</span></div>
+        ${list.map(i => {
+          const detail = key === "vlans" && i.parent ? `VLAN ${i.vlan_id ?? "?"} on ${i.parent}` : ((i.addresses || []).join(", ") || "No address");
+          return `<div class="interface-row"><div><div class="iface-name">${escapeHtml(i.name)}</div><div class="iface-meta">${escapeHtml(detail)}</div></div><span class="badge ${i.operstate === "up" ? "up" : "down"}">${escapeHtml(i.operstate)}</span><span>${escapeHtml(i.speed || "—")}</span><span class="mono">${escapeHtml(String(i.mtu ?? "—"))}</span></div>`;
+        }).join("")}
+      </div>`).join("") || '<div class="iface-meta">No interfaces reported by the Linux kernel.</div>';
+  }
+
+  function renderRecentEvents(lines) {
+    const body = document.getElementById("dashboardEvents");
+    if (!body) return;
+    body.innerHTML = lines.length ? lines.map(line => {
+      const parts = line.match(/^(\S+)\s+(\S+)(?:\[(\d+)\])?\s*:\s*(.*)$/);
+      const time = parts ? parts[1] : "—";
+      const source = parts ? parts[2] : "journal";
+      const message = parts ? parts[4] : line;
+      return `<tr><td class="mono">${escapeHtml(time)}</td><td>${escapeHtml(message)}</td><td>${escapeHtml(source)}</td><td><span class="badge up">INFO</span></td></tr>`;
+    }).join("") : '<tr><td colspan="4" class="mono">No journal entries returned.</td></tr>';
+  }
+
+  function firewallCheckbox(name) {
+    const checked = (fwConfig.interfaces || []).includes(name);
+    return `<label title="Protect forwarded traffic arriving on this interface"><input type="checkbox" class="fw-interface-toggle" data-iface="${escapeHtml(name)}" ${checked ? "checked" : ""} onchange="toggleInterfaceFirewall(this)"><span class="muted" style="margin-left:5px">Enable</span></label>`;
+  }
+
+  async function toggleInterfaceFirewall(checkbox) {
+    const iface = checkbox.dataset.iface;
+    const previous = checkbox.checked;
+    checkbox.disabled = true;
+    const updated = new Set(fwConfig.interfaces || []);
+    if (previous) updated.add(iface); else updated.delete(iface);
+    try {
+      const config = {...fwConfig, interfaces: [...updated]};
+      await api("/api/firewall/config", {method: "POST", body: JSON.stringify(config)});
+      fwConfig = config;
+      document.querySelectorAll(".fw-interface-toggle").forEach(el => {
+        if (el.dataset.iface === iface) el.checked = previous;
+      });
+      await loadConfigStatus();
+      showToast(`Firewall ${previous ? "enabled" : "disabled"} for ${iface} in pending configuration. Press Apply Changes.`);
+    } catch (err) {
+      checkbox.checked = !previous;
+      showToast("Could not stage interface firewall: " + err.message);
+    } finally { checkbox.disabled = false; }
+  }
+
+  async function refreshFirewallInterfaceState() {
+    const data = await api("/api/firewall/config");
+    fwConfig = data.config || {interfaces: [], nat: [], pat: []};
+    document.querySelectorAll(".fw-interface-toggle").forEach(el => {
+      el.checked = fwConfig.interfaces.includes(el.dataset.iface);
+    });
+  }
+
+  function renderInterfaces(items) {
+    const categories = ["ethernet", "other"];
+    categories.forEach(category => {
+      const group = document.querySelector(`.interface-group[data-category="${category}"]`);
+      if (!group) return;
+      const tbody = group.querySelector("tbody");
+      const count = group.querySelector(".group-count");
+      const groupItems = items.filter(i => (i.category || "other") === category);
+      if (count) count.textContent = groupItems.length;
+
+      if (!groupItems.length) {
+        tbody.innerHTML = `<tr><td colspan="7" class="mono">No ${category} interfaces detected.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = groupItems.map(i => {
+        const status = i.operstate === "up";
+        const statusCell = `<td><span class="badge ${status ? "up" : "down"}">${escapeHtml(i.operstate)}</span></td>`;
+        const addressCell = `<td class="mono">${escapeHtml((i.addresses || []).join(", ") || "—")}</td>`;
+        const action = `<td><button class="btn" onclick="editInterface('${escapeHtml(i.name)}')">Edit</button></td>`;
+
+        if (category === "vlans") {
+          return `<tr><td class="mono">${escapeHtml(i.name)}</td><td class="mono">${escapeHtml(i.parent || "—")}</td>${statusCell}${addressCell}<td>${escapeHtml(String(i.mtu ?? "—"))}</td><td>${i.name === "lo" ? "—" : firewallCheckbox(i.name)}</td>${action}</tr>`;
+        }
+
+        const typeCell = category === "other" ? `<td>${escapeHtml(i.type || "Other")}</td>` : "";
+        return category === "other"
+          ? `<tr>${`<td class="mono">${escapeHtml(i.name)}</td>`}${typeCell}${statusCell}${addressCell}<td>${escapeHtml(String(i.mtu ?? "—"))}</td><td>${i.name === "lo" ? "—" : firewallCheckbox(i.name)}</td>${action}</tr>`
+          : `<tr><td class="mono">${escapeHtml(i.name)}</td>${statusCell}${addressCell}<td>${escapeHtml(i.speed || "—")}</td><td>${escapeHtml(String(i.mtu ?? "—"))}</td><td>${firewallCheckbox(i.name)}</td>${action}</tr>`;
+      }).join("");
+    });
+  }
+
+  function filterInterfaceGroups(query) {
+    const q = String(query || "").toLowerCase().trim();
+    document.querySelectorAll(".interface-group").forEach(group => {
+      let visible = 0;
+      group.querySelectorAll("tbody tr").forEach(row => {
+        const match = !q || row.textContent.toLowerCase().includes(q);
+        row.style.display = match ? "" : "none";
+        if (match) visible++;
+      });
+      group.style.display = q && visible === 0 ? "none" : "";
+    });
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  async function loadInterfaces() {
+    try {
+      const items = await api("/api/interfaces");
+      await refreshFirewallInterfaceState();
+      renderInterfaces(items);
+    } catch (err) { showToast("Could not load interfaces: " + err.message); }
+  }
+
+  function routeKey(r) {
+    return [r.dst || r.destination || "default", r.gateway || "", r.dev || "", Number(r.metric ?? 0)].join("|");
+  }
+
+  async function loadRoutes() {
+    try {
+      const [routes, pending] = await Promise.all([api("/api/routes"), api("/api/routes/pending")]);
+      const desired = new Map((pending.desired || []).map(r => [routeKey(r), r]));
+      const liveStatic = new Set((pending.original || []).map(routeKey));
+      const rows = routes.map(r => {
+        const normalized = {dst:r.dst || "default", gateway:r.gateway || null, dev:r.dev || null, metric:Number(r.metric ?? 0)};
+        const key = routeKey(normalized);
+        const isStatic = String(r.protocol || r.proto || "").toLowerCase() === "static";
+        const removed = isStatic && liveStatic.has(key) && !desired.has(key);
+        const status = removed ? '<span class="badge down">Pending removal</span>' : (isStatic && desired.has(key) ? '<span class="badge up">Static</span>' : '<span class="muted">Live</span>');
+        const action = isStatic ? `<button class="btn danger" onclick='removeStaticRoute(${JSON.stringify(normalized).replace(/'/g,"&#39;")})'>Remove</button>` : '<span class="muted">Read only</span>';
+        return `<tr style="${removed ? "opacity:.55;text-decoration:line-through" : ""}"><td class="mono">${escapeHtml(normalized.dst)}</td><td class="mono">${escapeHtml(normalized.gateway || "—")}</td><td class="mono">${escapeHtml(normalized.dev || "—")}</td><td>${escapeHtml(String(r.metric ?? "—"))}</td><td>${escapeHtml(r.protocol || r.proto || "kernel")}</td><td>${status}</td><td>${removed ? '<span class="muted">Queued</span>' : action}</td></tr>`;
+      });
+      for (const [key, r] of desired) {
+        if (!liveStatic.has(key)) rows.push(`<tr><td class="mono">${escapeHtml(r.dst)}</td><td class="mono">${escapeHtml(r.gateway || "—")}</td><td class="mono">${escapeHtml(r.dev || "—")}</td><td>${escapeHtml(String(r.metric))}</td><td>static</td><td><span class="badge">Pending addition</span></td><td><button class="btn danger" onclick='removeStaticRoute(${JSON.stringify(r).replace(/'/g,"&#39;")})'>Undo</button></td></tr>`);
+      }
+      document.getElementById("routingTableBody").innerHTML = rows.length ? rows.join("") : '<tr><td colspan="7" class="muted">No routes found</td></tr>';
+      document.getElementById("routeStatus").textContent = `${routes.length} live routes`;
+    } catch (err) { showToast("Could not load routes: " + err.message); }
+  }
+
+  async function openRouteModal() {
+    try {
+      const interfaces = await api("/api/interfaces");
+      const select = document.getElementById("routeDevice");
+      select.innerHTML = '<option value="">No interface selected</option>' + interfaces.map(i => `<option value="${escapeHtml(i.name)}">${escapeHtml(i.name)} (${escapeHtml(i.type || i.category || "interface")})</option>`).join("");
+      document.getElementById("routeDestination").value = "";
+      document.getElementById("routeGateway").value = "";
+      document.getElementById("routeMetric").value = "100";
+      document.getElementById("routeModal").classList.add("show");
+    } catch (err) { showToast("Could not load interfaces: " + err.message); }
+  }
+
+  function closeRouteModal() { document.getElementById("routeModal").classList.remove("show"); }
+
+  async function saveStaticRoute(event) {
+    event.preventDefault();
+    const route = {
+      destination: document.getElementById("routeDestination").value.trim(),
+      gateway: document.getElementById("routeGateway").value.trim() || null,
+      dev: document.getElementById("routeDevice").value || null,
+      metric: Number(document.getElementById("routeMetric").value || 100)
+    };
+    try {
+      await api("/api/routes", {method:"POST", body:JSON.stringify(route)});
+      closeRouteModal(); showToast("Static route saved to pending configuration");
+      await Promise.all([loadRoutes(), loadConfigStatus()]);
+    } catch (err) { showToast("Could not stage route: " + err.message); }
+  }
+
+  async function removeStaticRoute(route) {
+    if (!window.confirm(`Stage removal of ${route.dst}? The live route remains until Apply Changes.`)) return;
+    try {
+      await api("/api/routes", {method:"DELETE", body:JSON.stringify({destination:route.dst || "default", gateway:route.gateway || null, dev:route.dev || null, metric:Number(route.metric ?? 0)})});
+      showToast("Route removal saved to pending configuration");
+      await Promise.all([loadRoutes(), loadConfigStatus()]);
+    } catch (err) { showToast("Could not stage route removal: " + err.message); }
+  }
+
+  async function loadWireless() {
+    try {
+      const items = await api("/api/interfaces");
+      const wireless = items.filter(i => i.category === "wireless");
+      const tbody = document.querySelector("#wirelessTable tbody");
+      tbody.innerHTML = wireless.length ? wireless.map(i => `
+        <tr>
+          <td class="mono">${escapeHtml(i.name)}</td>
+          <td><span class="badge ${i.operstate === "up" ? "up" : "down"}">${escapeHtml(i.operstate)}</span></td>
+          <td class="mono">${escapeHtml((i.addresses || []).join(", ") || "—")}</td>
+          <td>${escapeHtml(i.speed || "—")}</td>
+          <td>${escapeHtml(String(i.mtu ?? "—"))}</td>
+          <td><button class="btn" onclick="editInterface('${escapeHtml(i.name)}')">Edit</button></td>
+        </tr>`).join("") : '<tr><td colspan="6" class="mono">No wireless interfaces detected.</td></tr>';
+      document.getElementById("wirelessStatus").textContent = `${wireless.length} wireless interface${wireless.length === 1 ? "" : "s"}`;
+    } catch (err) { showToast("Could not load wireless interfaces: " + err.message); }
+  }
+
+  async function loadBridges() {
+    try {
+      const [bridges] = await Promise.all([api("/api/bridges"), refreshFirewallInterfaceState()]);
+      const tbody = document.querySelector("#bridgesTable tbody");
+      tbody.innerHTML = bridges.length ? bridges.map(b => `
+        <tr>
+          <td class="mono">${escapeHtml(b.name)}</td>
+          <td><span class="badge ${b.operstate === "up" ? "up" : "down"}">${escapeHtml(b.operstate)}</span></td>
+          <td class="mono">${escapeHtml((b.addresses || []).join(", ") || "—")}</td>
+          <td class="mono">${escapeHtml((b.members || []).join(", ") || "No member interfaces")}</td>
+          <td>${b.stp_enabled == null ? "—" : (b.stp_enabled ? "Enabled" : "Disabled")}</td>
+          <td>${escapeHtml(String(b.mtu ?? "—"))}</td>
+          <td>${firewallCheckbox(b.name)}</td>
+          <td><button class="btn" onclick="editBridge('${escapeHtml(b.name)}')">Edit</button> ${b.managed_by_app ? `<button class="btn danger" onclick="deleteBridge('${escapeHtml(b.name)}')">Delete</button>` : `<span class="muted" title="Externally provisioned; can edit settings without deleting device">External</span>`}</td>
+        </tr>`).join("") : '<tr><td colspan="8" class="mono">No Linux bridges detected.</td></tr>';
+      document.getElementById("bridgesStatus").textContent = `${bridges.length} bridge${bridges.length === 1 ? "" : "s"}`;
+    } catch (err) { showToast("Could not load bridges: " + err.message); }
+  }
+
+  async function loadVlans() {
+    try {
+      const [vlans] = await Promise.all([api("/api/vlans"), refreshFirewallInterfaceState()]);
+      const tbody = document.querySelector("#vlansTable tbody");
+      tbody.innerHTML = vlans.length ? vlans.map(v => `
+        <tr>
+          <td class="mono">${escapeHtml(v.name)}</td>
+          <td class="mono">${escapeHtml(String(v.vlan_id ?? "—"))}</td>
+          <td class="mono">${escapeHtml(v.parent || "—")}</td>
+          <td><span class="badge ${v.operstate === "up" ? "up" : "down"}">${escapeHtml(v.operstate)}</span></td>
+          <td class="mono">${escapeHtml((v.addresses || []).join(", ") || "—")}</td>
+          <td>${escapeHtml(String(v.mtu ?? "—"))}</td>
+          <td>${firewallCheckbox(v.name)}</td>
+          <td><button class="btn" onclick="editVlan('${escapeHtml(v.name)}')">Edit</button> ${v.managed_by_app ? `<button class="btn danger" onclick="deleteVlan('${escapeHtml(v.name)}')">Delete</button>` : `<span class="muted" title="Externally provisioned; can edit settings without deleting device">External</span>`}</td>
+        </tr>`).join("") : '<tr><td colspan="8" class="mono">No VLAN interfaces detected.</td></tr>';
+      document.getElementById("vlansStatus").textContent = `${vlans.length} VLAN${vlans.length === 1 ? "" : "s"}`;
+    } catch (err) { showToast("Could not load VLANs: " + err.message); }
+  }
+
+  let fwConfig = {interfaces: [], nat: [], pat: []};
+  let fwAvailableInterfaces = [];
+
+  function fwInterfaceSelect(value = "") {
+    return `<select class="input">${fwAvailableInterfaces.map(name =>
+      `<option value="${escapeHtml(name)}" ${name === value ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select>`;
+  }
+
+  function updateNatSourceField(row, item = {}) {
+    const type = row.querySelector(".nat-source-type").value;
+    const cell = row.querySelector(".nat-source-field");
+    if (type === "interface") {
+      cell.innerHTML = fwInterfaceSelect(item.inbound || "");
+    } else {
+      cell.innerHTML = `<input class="input" placeholder="172.16.2.0/24" value="${escapeHtml(item.source || "")}">`;
+    }
+  }
+
+  function addFwRow(type, item = {}) {
+    const body = document.getElementById(type === "nat" ? "fwNatRows" : "fwPatRows");
+    const row = document.createElement("tr");
+    if (type === "nat") {
+      const sourceType = item.source_type || "cidr";
+      row.innerHTML = `<td><select class="input nat-source-type" onchange="updateNatSourceField(this.closest('tr'))">
+          <option value="cidr" ${sourceType === "cidr" ? "selected" : ""}>Source CIDR</option>
+          <option value="interface" ${sourceType === "interface" ? "selected" : ""}>Input Interface</option>
+        </select></td>
+        <td class="nat-source-field"></td>
+        <td>${fwInterfaceSelect(item.outbound)}</td><td><button class="btn danger" onclick="this.closest('tr').remove()">Remove</button></td>`;
+      body.appendChild(row);
+      updateNatSourceField(row, item);
+      return;
+    } else {
+      row.innerHTML = `<td>${fwInterfaceSelect(item.inbound)}</td>
+        <td><select class="input"><option value="tcp" ${item.protocol === "tcp" ? "selected" : ""}>TCP</option><option value="udp" ${item.protocol === "udp" ? "selected" : ""}>UDP</option></select></td>
+        <td><input class="input" type="number" min="1" max="65535" value="${escapeHtml(String(item.external_port || ""))}"></td>
+        <td><input class="input" placeholder="172.16.2.10" value="${escapeHtml(item.target || "")}"></td>
+        <td><input class="input" type="number" min="1" max="65535" value="${escapeHtml(String(item.internal_port || ""))}"></td>
+        <td><button class="btn danger" onclick="this.closest('tr').remove()">Remove</button></td>`;
+    }
+    body.appendChild(row);
+  }
+
+  async function loadFirewallConfig() {
+    try {
+      const [data, interfaces] = await Promise.all([api("/api/firewall/config"), api("/api/interfaces")]);
+      fwConfig = data.config || {interfaces: [], nat: [], pat: []};
+      fwAvailableInterfaces = interfaces.filter(i => i.name !== "lo").map(i => i.name);
+      document.getElementById("fwNatRows").innerHTML = "";
+      document.getElementById("fwPatRows").innerHTML = "";
+      (fwConfig.nat || []).forEach(item => addFwRow("nat", item));
+      (fwConfig.pat || []).forEach(item => addFwRow("pat", item));
+    } catch (err) { showToast("Could not load firewall settings: " + err.message); }
+  }
+
+  async function saveFirewallDraft() {
+    const config = {
+      interfaces: [...(fwConfig.interfaces || [])],
+      nat: Array.from(document.querySelectorAll("#fwNatRows tr")).map(row => {
+        const type = row.querySelector(".nat-source-type").value;
+        const sourceField = row.querySelector(".nat-source-field input, .nat-source-field select");
+        const outbound = row.querySelector("td:nth-child(3) select").value;
+        return type === "interface"
+          ? {source_type: "interface", inbound: sourceField.value, outbound}
+          : {source_type: "cidr", source: sourceField.value.trim(), outbound};
+      }),
+      pat: Array.from(document.querySelectorAll("#fwPatRows tr")).map(row => {
+        const fields = row.querySelectorAll("input, select");
+        return {inbound: fields[0].value, protocol: fields[1].value,
+          external_port: Number(fields[2].value), target: fields[3].value.trim(),
+          internal_port: Number(fields[4].value)};
+      })
+    };
+    try {
+      await api("/api/firewall/config", {method:"POST", body:JSON.stringify(config)});
+      fwConfig = config;
+      await loadConfigStatus();
+      showToast("Firewall draft saved. Press Apply Changes to activate.");
+    } catch (err) { showToast("Firewall save failed: " + err.message); }
+  }
+
+  async function loadFirewall() {
+    try {
+      const data = await api("/api/firewall");
+      const objects = Array.isArray(data.nftables) ? data.nftables : [];
+      const tables = {};
+      const chains = [];
+      const rules = [];
+      objects.forEach(obj => {
+        if (obj.table) tables[obj.table.name] = obj.table;
+        if (obj.chain) chains.push(obj.chain);
+        if (obj.rule) rules.push(obj.rule);
+      });
+      const ruleBody = document.querySelector("#firewallTable tbody");
+      ruleBody.innerHTML = rules.length ? rules.map(r => {
+        const expr = (r.expr || []).map(e => JSON.stringify(e)).join(" ");
+        return `<tr><td class="mono">${escapeHtml(r.table || "—")}</td><td class="mono">${escapeHtml(r.chain || "—")}</td><td>${escapeHtml(r.comment || "rule")}</td><td class="mono" style="white-space:normal;max-width:700px">${escapeHtml(expr || "—")}</td><td class="mono">${escapeHtml(String(r.handle ?? "—"))}</td></tr>`;
+      }).join("") : '<tr><td colspan="5" class="mono">No nftables rules detected.</td></tr>';
+      const chainBody = document.querySelector("#firewallChainsTable tbody");
+      chainBody.innerHTML = chains.length ? chains.map(c => `<tr><td class="mono">${escapeHtml(c.table || "—")}</td><td class="mono">${escapeHtml(c.name || "—")}</td><td>${escapeHtml(c.type || "—")}</td><td>${escapeHtml(c.hook || "—")}</td><td>${escapeHtml(c.policy || "—")}</td></tr>`).join("") : '<tr><td colspan="5" class="mono">No nftables chains detected.</td></tr>';
+      document.getElementById("firewallRuleCount").textContent = `${rules.length} rule${rules.length === 1 ? "" : "s"}`;
+      document.getElementById("firewallChainCount").textContent = `${chains.length} chain${chains.length === 1 ? "" : "s"}`;
+      const status = document.getElementById("firewallStatus");
+      status.textContent = "nftables active";
+      status.className = "badge up";
+    } catch (err) {
+      const status = document.getElementById("firewallStatus");
+      status.textContent = "Unavailable";
+      status.className = "badge down";
+      showToast("Could not load firewall: " + err.message);
+    }
+  }
+
+  function formatLeaseRemaining(seconds) {
+    seconds = Math.max(0, Number(seconds) || 0);
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    if (days) return `${days}d ${hours}h`;
+    if (hours) return `${hours}h ${minutes}m`;
+    return `${minutes}m`;
+  }
+
+  function addDhcpReservation(reservation = {}) {
+    const tbody = document.getElementById("keaReservationsBody");
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td><input class="input reservation-mac" aria-label="MAC address" placeholder="aa:bb:cc:dd:ee:ff" value="${escapeHtml(reservation.hw_address || "")}"></td>
+      <td><input class="input reservation-ip" aria-label="Reserved IPv4 address" placeholder="172.16.2.20" value="${escapeHtml(reservation.ip_address || "")}"></td>
+      <td><input class="input reservation-hostname" aria-label="Hostname" placeholder="printer" value="${escapeHtml(reservation.hostname || "")}"></td>
+      <td><button type="button" class="btn" onclick="this.closest('tr').remove()">Remove</button></td>`;
+    tbody.appendChild(row);
+  }
+
+  function collectDhcpReservations() {
+    return Array.from(document.querySelectorAll("#keaReservationsBody tr")).map(row => ({
+      hw_address: row.querySelector(".reservation-mac").value.trim(),
+      ip_address: row.querySelector(".reservation-ip").value.trim(),
+      hostname: row.querySelector(".reservation-hostname").value.trim() || null
+    }));
+  }
+
+  async function loadDhcp() {
+    try {
+      const data = await api("/api/dhcp");
+      const config = data.config || {};
+      const selector = document.getElementById("keaInterface");
+      const previous = config.interface || "lan0";
+      selector.innerHTML = (data.interfaces || []).map(item => {
+        const label = `${item.name} — ${item.type || "Interface"}`;
+        return `<option value="${escapeHtml(item.name)}" ${item.name === previous ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }).join("");
+      if (!selector.options.length) selector.innerHTML = `<option value="${escapeHtml(previous)}">${escapeHtml(previous)}</option>`;
+      document.getElementById("keaEnabled").checked = !!config.enabled;
+      document.getElementById("keaSubnet").value = config.subnet || "";
+      document.getElementById("keaRouter").value = config.router || "";
+      document.getElementById("keaPoolStart").value = config.pool_start || "";
+      document.getElementById("keaPoolEnd").value = config.pool_end || "";
+      ["keaDns1", "keaDns2", "keaDns3"].forEach((id, i) => {
+        document.getElementById(id).value = (config.dns_servers || [])[i] || "";
+      });
+      document.getElementById("keaDomain").value = config.domain_name || "";
+      document.getElementById("keaLease").value = config.valid_lifetime || 86400;
+      document.getElementById("keaReservationsBody").innerHTML = "";
+      (config.reservations || []).forEach(addDhcpReservation);
+      const status = document.getElementById("keaStatus");
+      status.textContent = !data.installed ? "Kea not installed" : (data.active ? "Running" : "Stopped");
+      status.className = "badge " + (data.active ? "up" : "down");
+      document.getElementById("keaServiceInfo").textContent = data.installed
+        ? `${data.service} · ${data.service_enabled ? "enabled at boot" : "not enabled at boot"} · ${data.config_path}`
+        : `Install the Kea DHCPv4 server package (for Debian/Ubuntu: kea-dhcp4-server) · expected config: ${data.config_path}`;
+      document.getElementById("keaDraftInfo").textContent = data.pending ? "Draft differs from applied Kea configuration" : "Showing pending or last-applied configuration";
+      const leases = data.leases || [];
+      document.getElementById("keaLeaseCount").textContent = `${leases.length} lease${leases.length === 1 ? "" : "s"}`;
+      const body = document.querySelector("#keaLeasesTable tbody");
+      body.innerHTML = leases.length ? leases.map(lease => `
+        <tr><td class="mono">${escapeHtml(lease.address)}</td><td class="mono">${escapeHtml(lease.mac || "—")}</td><td>${escapeHtml(lease.hostname || "—")}</td><td>${formatLeaseRemaining(lease.remaining_seconds)}</td></tr>
+      `).join("") : '<tr><td colspan="4" class="mono">No active Kea leases found.</td></tr>';
+      document.getElementById("keaLeaseInfo").textContent = `Lease database: ${data.config?.enabled ? "/var/lib/kea/kea-leases4.csv" : "DHCP disabled"}`;
+    } catch (err) {
+      const status = document.getElementById("keaStatus");
+      status.textContent = "Unavailable";
+      status.className = "badge down";
+      showToast("Could not load Kea DHCP configuration: " + err.message);
+    }
+  }
+
+  async function stageDhcpConfig(event) {
+    event.preventDefault();
+    const payload = {
+      enabled: document.getElementById("keaEnabled").checked,
+      interface: document.getElementById("keaInterface").value,
+      subnet: document.getElementById("keaSubnet").value.trim(),
+      router: document.getElementById("keaRouter").value.trim(),
+      pool_start: document.getElementById("keaPoolStart").value.trim(),
+      pool_end: document.getElementById("keaPoolEnd").value.trim(),
+      dns_servers: ["keaDns1", "keaDns2", "keaDns3"].map(id => document.getElementById(id).value.trim()).filter(Boolean),
+      domain_name: document.getElementById("keaDomain").value.trim() || null,
+      valid_lifetime: Number(document.getElementById("keaLease").value || 86400),
+      reservations: collectDhcpReservations()
+    };
+    try {
+      await api("/api/dhcp", {method:"POST", body:JSON.stringify(payload)});
+      showToast("Kea DHCP configuration saved to pending JSON");
+      await Promise.all([loadDhcp(), loadConfigStatus()]);
+    } catch (err) { showToast("Could not stage DHCP configuration: " + err.message); }
+  }
+
+  async function loadLogs() {
+    try {
+      const logs = await api("/api/logs?lines=100");
+      const box = document.getElementById("logsOutput");
+      if (box) box.innerHTML = logs.length ? logs.map(line => `<div>${escapeHtml(line)}</div>`).join("") : "<div>No journal entries.</div>";
+      const status = document.getElementById("logsStatus");
+      if (status) status.textContent = `${logs.length} entries · journalctl`;
+    } catch (err) {
+      showToast("Could not load logs: " + err.message);
+      const status = document.getElementById("logsStatus");
+      if (status) status.textContent = "journalctl unavailable";
+    }
+  }
+
+  const pageInfo = {
+    dashboard: ["Dashboard", "Router overview and live network status"],
+    interfaces: ["Interfaces", "Physical Ethernet and other Linux interfaces"],
+    wireless: ["Wireless", "Linux wireless network interfaces"],
+    bridges: ["Bridges", "Linux bridge devices and member interfaces"],
+    routing: ["Routing", "Kernel routing table and static routes"],
+    firewall: ["Firewall", "Live nftables rules and chains"],
+    dhcp: ["DHCP", "DHCP server configuration and active leases"],
+    dns: ["DNS", "Local resolver, cache and upstream DNS"],
+    vlans: ["VLANs", "802.1Q VLAN configuration"],
+    vpn: ["VPN", "WireGuard tunnels and peers"],
+    logs: ["Logs", "System and network service logs"],
+    system: ["System", "Router operating system and services"]
+  };
+
+  document.querySelectorAll(".nav-item").forEach(item => {
+    item.addEventListener("click", () => {
+      navigate(item.dataset.page);
+    });
+  });
+
+  function navigate(page) {
+    document.querySelectorAll(".nav-item").forEach(x => {
+      x.classList.toggle("active", x.dataset.page === page);
+    });
+
+    document.querySelectorAll(".page").forEach(x => {
+      x.classList.toggle("active", x.id === "page-" + page);
+    });
+
+    document.getElementById("pageTitle").textContent = pageInfo[page][0];
+    document.getElementById("pageSubtitle").textContent = pageInfo[page][1];
+
+    history.replaceState(null, "", "#" + page);
+    if (page === "dashboard") loadDashboard();
+    if (page === "interfaces") loadInterfaces();
+    if (page === "wireless") loadWireless();
+    if (page === "bridges") loadBridges();
+    if (page === "routing") loadRoutes();
+    if (page === "firewall") { loadFirewall(); loadFirewallConfig(); }
+    if (page === "vlans") loadVlans();
+    if (page === "dhcp") loadDhcp();
+    if (page === "logs") loadLogs();
+  }
+
+  function showToast(message) {
+    const toast = document.getElementById("toast");
+    toast.textContent = message;
+    toast.classList.add("show");
+
+    clearTimeout(window.toastTimer);
+    window.toastTimer = setTimeout(() => {
+      toast.classList.remove("show");
+    }, 2600);
+  }
+
+  async function downloadRouterConfig() {
+    try {
+      const response = await fetch("/api/config/download", {cache: "no-store"});
+      if (!response.ok) throw new Error(await response.text());
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "config.json";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast("Configuration download started");
+    } catch (err) { showToast("Download failed: " + err.message); }
+  }
+
+  async function stageRouterConfigUpload(input) {
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    if (file.size > 2_000_000) { showToast("Configuration file is too large"); return; }
+    try {
+      const text = await file.text();
+      const config = JSON.parse(text);
+      if (!config || config.version !== 1 || !config.files || !Array.isArray(config.routes))
+        throw new Error("Not a valid Router Manager config.json backup");
+      const status = await api("/api/config/status");
+      if (!window.confirm(
+        `${status.pending ? "This will replace your existing staged changes. " : ""}` +
+        "Restore this configuration as a draft? No live changes occur until Apply Changes."
+      )) return;
+      const result = await api("/api/config/restore", {
+        method: "POST", body: JSON.stringify(config)
+      });
+      showToast(result.pending ? "Restore staged. Press Apply Changes." : "Backup matches current configuration");
+      await loadConfigStatus();
+      refreshCurrentPage();
+    } catch (err) { showToast("Restore failed: " + err.message); }
+  }
+
+  async function loadConfigStatus() {
+    try {
+      const status = await api("/api/config/status");
+      const bar = document.getElementById("pendingChangesBar");
+      const button = document.getElementById("applyChangesButton");
+      const title = document.getElementById("pendingChangesTitle");
+      const summary = document.getElementById("pendingChangesSummary");
+      const list = document.getElementById("pendingChangesList");
+      const count = Number(status.count || 0);
+      if (!status.pending || count === 0) {
+        bar.classList.remove("show");
+        button.textContent = "Apply Changes";
+        button.disabled = true;
+        button.style.opacity = ".55";
+        list.innerHTML = "";
+        return;
+      }
+      bar.classList.add("show");
+      button.disabled = false;
+      button.style.opacity = "1";
+      button.textContent = `Apply Changes (${count})`;
+      title.textContent = count === 1 ? "1 unapplied change" : `${count} unapplied changes`;
+      summary.textContent = `Draft saved to ${status.storage_file || "config.json"}${status.pending_section ? ` (${status.pending_section} section)` : ""}; live system stays unchanged until Apply Changes.`;
+      list.innerHTML = (status.changes || []).map(change => `
+        <div class="pending-item">
+          <span class="pending-action ${escapeHtml(change.action)}">${escapeHtml(change.action)}</span>
+          <span class="mono">${escapeHtml(change.target || change.file)}</span>
+          <span class="muted">${escapeHtml(change.kind || "Configuration")}</span>
+        </div>`).join("");
+    } catch (err) {
+      console.error("Could not load configuration status", err);
+    }
+  }
+
+  async function applyChanges() {
+    try {
+      const status = await api("/api/config/status");
+      if (!status.pending) {
+        showToast("No unapplied changes");
+        return;
+      }
+      await api("/api/config/apply", {method: "POST", body: JSON.stringify({})});
+      showToast("Changes applied");
+      await loadConfigStatus();
+      refreshCurrentPage();
+    } catch (err) { showToast("Apply failed: " + err.message); }
+  }
+
+  async function discardChanges() {
+    try {
+      const status = await api("/api/config/status");
+      if (!status.pending) {
+        showToast("No unapplied changes");
+        await loadConfigStatus();
+        return;
+      }
+      const count = Number(status.count || 0);
+      const label = count === 1 ? "1 staged change" : `${count} staged changes`;
+      if (!window.confirm(`Undo ${label}? The staged configuration will be discarded and the live system will remain unchanged.`)) return;
+      await api("/api/config/discard", {method: "POST", body: JSON.stringify({})});
+      showToast("Staged changes undone");
+      await loadConfigStatus();
+      refreshCurrentPage();
+    } catch (err) { showToast("Undo failed: " + err.message); }
+  }
+
+  function toggleSwitch(el) {
+    el.classList.toggle("on");
+    showToast(el.classList.contains("on") ? "Setting enabled" : "Setting disabled");
+  }
+
+  function field(label, id, value="", type="text", extra="") {
+    return `<div class="form-group"><label>${label}</label><input class="input" id="cfg_${id}" type="${type}" value="${escapeHtml(value ?? "")}" ${extra}></div>`;
+  }
+
+  function addressFields(mode, addressMode="static", address="") {
+    return `<div class="form-group"><label>IPv4 configuration</label><select class="input" id="cfg_address_mode" onchange="toggleAddressField()"><option value="dhcp" ${addressMode === "dhcp" ? "selected" : ""}>DHCP</option><option value="static" ${addressMode !== "dhcp" ? "selected" : ""}>Static IP</option></select></div>` +
+      field("Static IPv4 address / CIDR", "address", address || "", "text", `placeholder="192.168.1.1/24"`) +
+      `<div class="form-help" id="cfg_address_help">Enter an IPv4 address including CIDR, for example 192.168.1.1/24.</div>`;
+  }
+
+  function toggleAddressField() {
+    const mode = cfg("address_mode");
+    const input = document.getElementById("cfg_address");
+    const help = document.getElementById("cfg_address_help");
+    if (!input) return;
+    input.disabled = mode === "dhcp";
+    input.required = mode === "static";
+    input.style.opacity = mode === "dhcp" ? ".55" : "1";
+    if (help) help.textContent = mode === "dhcp" ? "The interface will obtain an IPv4 address from DHCP." : "Enter an IPv4 address including CIDR, for example 192.168.1.1/24.";
+  }
+
+  async function getAvailableInterfaces(kind, current=[]) {
+    const items = await api("/api/interfaces");
+    const selected = new Set(current);
+    return items.filter(i => {
+      if (i.name === "lo") return false;
+      if (kind === "bridge-member") return i.category !== "bridges";
+      if (kind === "vlan-parent") return i.category !== "vlans";
+      return true;
+    });
+  }
+
+  function interfaceMultiSelect(items, selected=[]) {
+    const selectedSet = new Set(selected);
+    return `<div class="form-group full"><label>Member interfaces</label><select class="input" id="cfg_members" multiple size="6" style="min-height:130px">` +
+      items.map(i => `<option value="${escapeHtml(i.name)}" ${selectedSet.has(i.name) ? "selected" : ""}>${escapeHtml(i.name)} — ${escapeHtml(i.type || i.category || "Interface")}</option>`).join("") +
+      `</select><div class="form-help">Hold Ctrl/Cmd to select multiple interfaces.</div></div>`;
+  }
+
+  function interfaceSelect(items, selected="") {
+    return `<div class="form-group"><label>Parent interface</label><select class="input" id="cfg_parent">` +
+      `<option value="">Select interface</option>` +
+      items.map(i => `<option value="${escapeHtml(i.name)}" ${i.name === selected ? "selected" : ""}>${escapeHtml(i.name)} — ${escapeHtml(i.type || i.category || "Interface")}</option>`).join("") +
+      `</select></div>`;
+  }
+
+  async function openAddDialog(mode) {
+    if (mode === "interface") return;
+    document.getElementById("configMode").value = "add-" + mode;
+    document.getElementById("configName").value = "";
+    document.getElementById("modalTitle").textContent = mode === "bridge" ? "Add Bridge" : "Add VLAN";
+    const fields = document.getElementById("configFields");
+    const items = mode === "bridge" ? await getAvailableInterfaces("bridge-member") : await getAvailableInterfaces("vlan-parent");
+    if (mode === "bridge") fields.innerHTML = field("Name", "name") + `<div class="form-group"><label>STP</label><select class="input" id="cfg_stp"><option value="false">Disabled</option><option value="true">Enabled</option></select></div>` + interfaceMultiSelect(items) + addressFields("bridge");
+    if (mode === "vlan") fields.innerHTML = field("Name", "name") + interfaceSelect(items) + field("VLAN ID", "vlan_id", "12", "number") + field("MTU", "mtu", "1500", "number") + addressFields("vlan");
+    document.getElementById("configModal").classList.add("show");
+    toggleAddressField();
+  }
+
+  async function editInterface(name) {
+    try {
+      const data = await api("/api/interfaces/" + encodeURIComponent(name));
+      document.getElementById("configMode").value = "edit-interface";
+      document.getElementById("configName").value = name;
+      document.getElementById("modalTitle").textContent = "Edit Interface — " + name;
+      document.getElementById("configFields").innerHTML = field("IP address / prefix (leave blank to keep)", "address", data.addresses?.find(x => x.indexOf(":") < 0) || "", "text") + field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>`;
+      document.getElementById("configModal").classList.add("show");
+    } catch (err) { showToast("Interface lookup failed: " + err.message); }
+  }
+
+  async function editBridge(name) {
+    const data = (await api("/api/bridges")).find(x => x.name === name);
+    if (!data) return showToast("Bridge not found");
+    const ipv4 = (data.addresses || []).find(x => x.indexOf(".") >= 0) || "";
+    document.getElementById("configMode").value = "edit-bridge"; document.getElementById("configName").value = name;
+    document.getElementById("modalTitle").textContent = "Edit Bridge — " + name;
+    const items = await getAvailableInterfaces("bridge-member", data.members || []);
+    document.getElementById("configFields").innerHTML = `<div class="form-group"><label>STP</label><select class="input" id="cfg_stp"><option value="${data.stp_enabled ? "true" : "false"}">${data.stp_enabled ? "Enabled" : "Disabled"}</option><option value="${data.stp_enabled ? "false" : "true"}">${data.stp_enabled ? "Disabled" : "Enabled"}</option></select></div>` + interfaceMultiSelect(items, data.members || []) + addressFields("bridge", ipv4 ? "static" : "static", ipv4);
+    document.getElementById("configModal").classList.add("show");
+    toggleAddressField();
+  }
+
+  async function deleteBridge(name) {
+    if (!window.confirm(`Stage deletion of bridge ${name}? The live system will not change until Apply Changes is pressed.`)) return;
+    try {
+      await api("/api/bridges/" + encodeURIComponent(name), {method:"DELETE"});
+      showToast(`Bridge ${name} deletion staged`);
+      refreshCurrentPage();
+    } catch (err) { showToast("Bridge deletion failed: " + err.message); }
+  }
+
+  async function editVlan(name) {
+    const data = (await api("/api/vlans")).find(x => x.name === name);
+    if (!data) return showToast("VLAN not found");
+    const ipv4 = (data.addresses || []).find(x => x.indexOf(".") >= 0) || "";
+    document.getElementById("configMode").value = "edit-vlan"; document.getElementById("configName").value = name;
+    document.getElementById("modalTitle").textContent = "Edit VLAN — " + name;
+    document.getElementById("configFields").innerHTML = field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>` + addressFields("vlan", ipv4 ? "static" : "static", ipv4);
+    document.getElementById("configModal").classList.add("show");
+    toggleAddressField();
+  }
+
+  async function deleteVlan(name) {
+    if (!window.confirm(`Stage deletion of VLAN ${name}? The live system will not change until Apply Changes is pressed.`)) return;
+    try {
+      await api("/api/vlans/" + encodeURIComponent(name), {method:"DELETE"});
+      showToast(`VLAN ${name} deletion staged`);
+      refreshCurrentPage();
+    } catch (err) { showToast("VLAN deletion failed: " + err.message); }
+  }
+
+  function closeConfigModal() { document.getElementById("configModal").classList.remove("show"); }
+
+  async function submitConfigForm(event) {
+    event.preventDefault();
+    const mode = document.getElementById("configMode").value, name = document.getElementById("configName").value;
+    try {
+      let result;
+      if (mode === "add-bridge") result = await api("/api/bridges", {method:"POST", body:JSON.stringify({name:cfg("name"), stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      else if (mode === "add-vlan") result = await api("/api/vlans", {method:"POST", body:JSON.stringify({name:cfg("name"), parent:cfg("parent"), vlan_id:num("vlan_id"), mtu:num("mtu"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address:cfg("address")||null, mtu:num("mtu"), state:cfg("state")||null})});
+      else if (mode === "edit-bridge") result = await api("/api/bridges/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      else if (mode === "edit-vlan") result = await api("/api/vlans/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({mtu:num("mtu"), state:cfg("state")||null, address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      closeConfigModal(); showToast("Configuration updated"); refreshCurrentPage();
+    } catch (err) { showToast("Configuration failed: " + err.message); }
+  }
+  function cfg(id) { const e=document.getElementById("cfg_"+id); return e ? e.value : ""; }
+  function num(id) { const v=cfg(id); return v === "" ? null : Number(v); }
+  function list(id) {
+    const e = document.getElementById("cfg_" + id);
+    if (!e) return [];
+    if (e.multiple) return Array.from(e.selectedOptions).map(o => o.value);
+    return e.value.split(",").map(x => x.trim()).filter(Boolean);
+  }
+
+  function filterTable(value, tableId) {
+    value = value.toLowerCase();
+    const table = document.getElementById(tableId);
+
+    if (!table) return;
+
+    table.querySelectorAll("tbody tr").forEach(row => {
+      row.style.display = row.innerText.toLowerCase().includes(value) ? "" : "none";
+    });
+  }
+
+  async function requestSystemPower(action) {
+    const reboot = action === "reboot";
+    const warning = reboot
+      ? "Reboot the router now? All network connections will be interrupted."
+      : "Shut down the router now? Network access will stop until the machine is powered on manually.";
+    if (!window.confirm(warning)) return;
+    try {
+      const result = await api("/api/system/" + action, { method: "POST" });
+      if (result.status !== "scheduled") throw new Error("Power action was not scheduled");
+      showToast(reboot ? "Router reboot scheduled. Connection will be lost." : "Router shutdown scheduled. Connection will be lost.");
+    } catch (err) {
+      showToast("System action failed: " + err.message);
+    }
+  }
+
+  function refreshCurrentPage() {
+    loadConfigStatus();
+    const page = location.hash.replace("#", "") || "dashboard";
+    if (page === "dashboard") loadDashboard();
+    if (page === "interfaces") loadInterfaces();
+    if (page === "wireless") loadWireless();
+    if (page === "bridges") loadBridges();
+    if (page === "routing") loadRoutes();
+    if (page === "firewall") { loadFirewall(); loadFirewallConfig(); }
+    if (page === "vlans") loadVlans();
+    if (page === "dhcp") loadDhcp();
+    if (page === "logs") loadLogs();
+  }
+
+  // Restore the selected page from the URL hash.
+  const initialPage = location.hash.replace("#", "");
+  if (pageInfo[initialPage]) {
+    navigate(initialPage);
+  }
+
+  loadDashboard();
+  loadConfigStatus();
+  setInterval(() => {
+    loadConfigStatus();
+    if ((location.hash.replace("#", "") || "dashboard") === "dashboard") loadDashboard();
+  }, 5000);
+</script>
+</body>
+</html>
