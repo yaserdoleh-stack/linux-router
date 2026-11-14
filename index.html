@@ -835,6 +835,14 @@
 
         <div class="card" style="margin-top:16px">
           <div class="card-header">
+            <div><h2>ARP / Neighbor Table</h2><span>Live kernel neighbors with saved DHCP aliases</span></div>
+            <span id="dashboardNeighborCount">0 neighbors</span>
+          </div>
+          <div id="dashboardNeighbors"><div class="iface-meta">Loading neighbors…</div></div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-header">
             <h2>Recent Events</h2>
             <span>Today</span>
           </div>
@@ -1250,6 +1258,7 @@
       updateWanTraffic(data.traffic);
 
       renderDashboardInterfaces(data.interfaces || []);
+      renderDashboardNeighbors(data.neighbors || []);
       renderRecentEvents(data.recent_events || []);
       renderInterfaces(data.interfaces || []);
     } catch (err) {
@@ -1285,6 +1294,58 @@
           return `<div class="interface-row"><div><div class="iface-name">${escapeHtml(i.name)}</div><div class="iface-meta">${escapeHtml(detail)}</div></div><span class="badge ${i.operstate === "up" ? "up" : "down"}">${escapeHtml(i.operstate)}</span><span>${escapeHtml(i.speed || "—")}</span><span class="mono">${escapeHtml(String(i.mtu ?? "—"))}</span></div>`;
         }).join("")}
       </div>`).join("") || '<div class="iface-meta">No interfaces reported by the Linux kernel.</div>';
+  }
+
+  function renderDashboardNeighbors(neighbors) {
+    const body = document.getElementById("dashboardNeighbors");
+    const count = document.getElementById("dashboardNeighborCount");
+    // Preserve in-progress edits during automatic dashboard refreshes.
+    if (body && body.contains(document.activeElement) && document.activeElement.matches("[data-neighbor-alias-mac]")) return;
+    const groups = new Map();
+    // Deduplicate within each interface, retaining the final snapshot entry.
+    for (const n of (Array.isArray(neighbors) ? neighbors : [])) {
+      const iface = String(n.interface || "Unknown interface");
+      if (!groups.has(iface)) groups.set(iface, new Map());
+      groups.get(iface).set(String(n.ip || ""), n);
+    }
+    const total = [...groups.values()].reduce((sum, entries) => sum + entries.size, 0);
+    if (count) count.textContent = `${total} neighbor${total === 1 ? "" : "s"} across ${groups.size} interface${groups.size === 1 ? "" : "s"}`;
+    if (!body) return;
+    body.innerHTML = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([iface, entries]) => `
+      <div style="margin:16px 0 0">
+        <div class="card-header"><h3>${escapeHtml(iface)}</h3><span>${entries.size} neighbor${entries.size === 1 ? "" : "s"}</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>IP Address</th><th>MAC Address</th><th>Alias Hostname</th><th>State</th></tr></thead>
+          <tbody>${[...entries.values()].map(n => `<tr>
+            <td class="mono">${escapeHtml(n.ip || "—")}</td>
+            <td class="mono">${escapeHtml(n.mac || "—")}</td>
+            <td><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <input class="input" style="min-width:120px;max-width:220px" aria-label="Alias hostname for ${escapeHtml(n.mac || "")}" data-neighbor-alias-mac="${escapeHtml(n.mac || "")}" value="${escapeHtml(n.alias_hostname || "")}" placeholder="Alias hostname" onkeydown="if(event.key==='Enter'){event.preventDefault();saveNeighborAlias(this.nextElementSibling)}">
+              <button class="btn" onclick="saveNeighborAlias(this)">Save</button>
+            </div></td>
+            <td>${escapeHtml(n.state || "—")}</td>
+          </tr>`).join("")}</tbody>
+        </table></div>
+      </div>`).join("") || '<div class="iface-meta" style="padding:16px">No resolved ARP / neighbor entries.</div>';
+  }
+
+  async function saveNeighborAlias(button) {
+    const input = button.parentElement.querySelector("[data-neighbor-alias-mac]");
+    if (!input) return;
+    const mac = input.dataset.neighborAliasMac;
+    const alias = input.value.trim();
+    button.disabled = true;
+    try {
+      await api("/api/dhcp/lease-alias", {method: "PUT", body: JSON.stringify({mac, alias})});
+      showToast(alias ? "Alias hostname saved" : "Alias hostname removed");
+      // Refresh every occurrence of this MAC across interfaces, and DHCP leases.
+      input.blur();
+      await loadDashboard();
+    } catch (err) {
+      showToast("Could not save alias: " + err.message);
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function renderRecentEvents(lines) {

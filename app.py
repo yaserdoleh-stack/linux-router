@@ -2214,6 +2214,51 @@ async def get_neighbor_count(interface: str | None = None) -> int:
         return 0
 
 
+async def get_dashboard_neighbors() -> list[dict[str, str]]:
+    """Read live kernel neighbor entries and decorate them with saved MAC aliases."""
+    try:
+        raw = await run_command("ip", "-j", "neigh", "show")
+        entries = json.loads(raw)
+        if not isinstance(entries, list):
+            return []
+    except (OSError, ValueError, RuntimeError) as exc:
+        logging.warning("Unable to read neighbor table: %s", exc)
+        return []
+
+    saved = _read_applied_config_json() or {}
+    aliases = saved.get("dhcp_lease_aliases", {})
+    if not isinstance(aliases, dict):
+        aliases = {}
+    # A neighbor IP may appear more than once across interfaces. Keep the
+    # last occurrence returned by the kernel snapshot for each IP.
+    latest_by_ip = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        mac = entry.get("lladdr")
+        ip = entry.get("dst")
+        if not isinstance(mac, str) or not isinstance(ip, str):
+            continue
+        try:
+            mac = _canonical_mac(mac)
+            ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        state = entry.get("state", entry.get("nud", ""))
+        if isinstance(state, list):
+            state = ", ".join(str(part) for part in state)
+        if str(state).upper() in ("FAILED", "INCOMPLETE"):
+            continue
+        latest_by_ip[(str(entry.get("dev", "")), ip)] = {
+            "ip": ip,
+            "mac": mac,
+            "alias_hostname": aliases.get(mac, "") if isinstance(aliases.get(mac), str) else "",
+            "interface": str(entry.get("dev", "")),
+            "state": str(state),
+        }
+    return sorted(latest_by_ip.values(), key=lambda n: (n["interface"], ipaddress.ip_address(n["ip"]).version, int(ipaddress.ip_address(n["ip"]))))
+
+
 async def get_log_lines(lines: int = 50) -> list[str]:
     lines = max(1, min(lines, 500))
     if not shutil.which("journalctl"):
@@ -2481,6 +2526,7 @@ async def dashboard():
     # value, return null rather than inventing a value for the dashboard.
     clients = await get_neighbor_count("lan0") if any(x["name"] == "lan0" for x in items) else 0
     logs = await get_log_lines(4)
+    neighbors = await get_dashboard_neighbors()
 
     return {
         "internet": {
@@ -2488,6 +2534,7 @@ async def dashboard():
             "address": next((x for x in (wan or {}).get("addresses", []) if ":" not in x), None),
         },
         "clients": clients,
+        "neighbors": neighbors,
         "traffic": {
             "interface": wan_name,
             "rx_bytes": stats["rx_bytes"],
