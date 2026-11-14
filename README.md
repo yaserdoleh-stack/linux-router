@@ -159,3 +159,16 @@ Issues and pull requests are welcome. When reporting a bug, include the Linux di
 Router Manager is licensed under the **GNU General Public License version 3 or (at your option) any later version** (`GPL-3.0-or-later`). See [LICENSE](LICENSE) for the full GNU GPLv3 text.
 
 You may use, modify, and redistribute this software under the terms of the GNU GPL, provided you comply with its conditions, including applicable source-code and license-notice obligations. This software is provided **without warranty**, as described in the license.
+
+### DHCP lease alias hostnames
+
+The Active DHCP Leases table provides an editable **Alias hostname** field for each
+active Kea lease. Enter a hostname and click **Save**; clear it and click **Save**
+to remove the alias. Aliases are stored immediately in
+`/var/lib/router-manager/config.json` as `dhcp_lease_aliases`, a mapping from
+normalized MAC addresses to alias hostnames. They survive lease expiration,
+reassignment, application restarts, and applying other staged changes.
+This is display-only metadata; it does not alter Kea reservations, client-supplied
+hostnames, or DNS records. Only active leases appear in the table.
+
+DHCP lease aliases accept arbitrary Unicode characters, punctuation and whitespace. Aliases are stored exactly as entered (an empty string removes the alias). They are display labels, not DNS hostnames.

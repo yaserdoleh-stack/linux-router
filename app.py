@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import subprocess
 import ipaddress
 import os
@@ -88,6 +89,7 @@ async def logout():
 
 class InterfaceUpdate(BaseModel):
     address: str | None = None
+    additional_addresses: list[str] | None = None
     mtu: int | None = None
     state: str | None = None
 
@@ -111,6 +113,7 @@ class BridgeUpdate(BaseModel):
     members: list[str] | None = None
     address_mode: str | None = None
     address: str | None = None
+    additional_addresses: list[str] | None = None
 
 
 class VlanCreate(BaseModel):
@@ -127,6 +130,7 @@ class VlanUpdate(BaseModel):
     state: str | None = None
     address_mode: str | None = None
     address: str | None = None
+    additional_addresses: list[str] | None = None
 
 
 class StaticRoute(BaseModel):
@@ -147,6 +151,11 @@ class FirewallConfig(BaseModel):
     interfaces: list[str] = Field(default_factory=list)
     nat: list[dict] = Field(default_factory=list)
     pat: list[dict] = Field(default_factory=list)
+
+
+class LeaseAliasUpdate(BaseModel):
+    mac: str
+    alias: str = ""
 
 
 class KeaReservation(BaseModel):
@@ -197,9 +206,9 @@ async def persist_pending_json_after_mutation(request, call_next):
         try:
             persist_staging_json()
         except Exception:
-            # Do not hide the endpoint response; the next status/apply request
-            # will surface a staging persistence error if the JSON file is absent.
-            pass
+            # Individual edit endpoints persist their own drafts.  Log any
+            # remaining middleware failure instead of silently hiding it.
+            logging.exception("Failed to persist pending configuration")
     return response
 
 
@@ -563,6 +572,7 @@ def _read_applied_config_json() -> dict | None:
             result["kea_dhcp"] = _normalize_kea_dhcp_config(payload["kea_dhcp"])
         if "firewall" in payload:
             result["firewall"] = _normalize_firewall(payload["firewall"])
+        result["dhcp_lease_aliases"] = _normalize_lease_aliases(payload.get("dhcp_lease_aliases", {}))
         return result
     except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError) as exc:
         raise RuntimeError(f"Cannot read applied router-manager JSON {APPLIED_CONFIG_JSON}: {exc}") from exc
@@ -634,6 +644,8 @@ def _write_applied_config_json(routes: list[dict], kea_dhcp: dict | None = None)
     payload["systemd_networkd"] = _read_installed_networkd_snapshot()
     if prior and "firewall" in prior:
         payload["firewall"] = prior["firewall"]
+    if prior:
+        payload["dhcp_lease_aliases"] = prior.get("dhcp_lease_aliases", {})
     APPLIED_CONFIG_JSON.parent.mkdir(parents=True, exist_ok=True)
     tmp = APPLIED_CONFIG_JSON.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2) + "\n")
@@ -1266,6 +1278,48 @@ def ipv4_network_section(address_mode: str, address: str | None) -> str:
     return f"Address={addr}\n"
 
 
+def normalized_secondary_addresses(values: list[str] | None, primary: str | None) -> list[str]:
+    if values is None:
+        return []
+    if len(values) > 32:
+        raise HTTPException(400, "Maximum 32 additional IP addresses")
+    result = []
+    for value in values:
+        try:
+            address = str(ipaddress.ip_interface(value.strip()))
+        except (ValueError, AttributeError) as exc:
+            raise HTTPException(400, f"Invalid additional IP address: {value}") from exc
+        if address == primary:
+            raise HTTPException(400, "Additional IP address duplicates primary address")
+        if address not in result:
+            result.append(address)
+    return result
+
+
+def networkd_addresses_for(name: str, kind: str) -> list[str]:
+    pathfn = bridge_network_path if kind == "bridge" else vlan_network_path
+    stage = pathfn(name, NETWORKD_STAGING_DIR)
+    live = pathfn(name)
+    path = stage if NETWORKD_STAGING_MARKER.exists() and stage.exists() else live
+    addresses = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip().startswith("Address="):
+                try:
+                    addresses.append(str(ipaddress.ip_interface(line.split("=", 1)[1].strip())))
+                except ValueError:
+                    continue
+    return addresses
+
+
+def add_secondary_networkd_addresses(path: Path, values: list[str]) -> None:
+    if not values:
+        return
+    content = path.read_text()
+    content = content.rstrip("\n") + "\n" + "".join(f"Address={a}\n" for a in values)
+    write_staged_file(path, content)
+
+
 def bridge_network_content(name: str, address_mode: str, address: str | None) -> str:
     return f"""[Match]\nName={name}\n\n[Network]\n{ipv4_network_section(address_mode, address)}"""
 
@@ -1719,6 +1773,54 @@ async def _sync_kea_dhcp_from_applied_json(config: dict) -> None:
     await _apply_kea_dhcp_config(normalized)
 
 
+def _canonical_mac(mac: str) -> str:
+    value = (mac or "").strip().lower().replace("-", ":")
+    if not re.fullmatch(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", value):
+        raise ValueError("Expected a six-byte MAC address, e.g. aa:bb:cc:dd:ee:ff")
+    return value
+
+
+def _normalize_lease_aliases(value: dict) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError("DHCP lease aliases must be a MAC-to-hostname mapping")
+    result = {}
+    for mac, alias in value.items():
+        canonical = _canonical_mac(mac)
+        if not isinstance(alias, str):
+            raise ValueError(f"Alias must be text for {canonical}")
+        result[canonical] = alias
+    return result
+
+
+@app.put("/api/dhcp/lease-alias")
+async def set_dhcp_lease_alias(update: LeaseAliasUpdate):
+    try:
+        mac = _canonical_mac(update.mac)
+        alias = update.alias
+        if alias:
+            _normalize_lease_aliases({mac: alias})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # Alias metadata is independent of Kea's DHCP configuration and is saved
+    # immediately; it must survive Apply Changes and startup refresh.
+    root = json.loads(APPLIED_CONFIG_JSON.read_text()) if APPLIED_CONFIG_JSON.exists() else refresh_config_json_from_networkd()
+    aliases = _normalize_lease_aliases(root.get("dhcp_lease_aliases", {}))
+    if alias:
+        aliases[mac] = alias
+    else:
+        aliases.pop(mac, None)
+    root["dhcp_lease_aliases"] = dict(sorted(aliases.items()))
+    APPLIED_CONFIG_JSON.parent.mkdir(parents=True, exist_ok=True)
+    tmp = APPLIED_CONFIG_JSON.with_suffix(".json.alias-tmp")
+    try:
+        tmp.write_text(json.dumps(root, indent=2) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(APPLIED_CONFIG_JSON)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"mac": mac, "alias": alias, "message": "Lease alias saved"}
+
+
 def _read_kea_leases(config: dict) -> list[dict]:
     if not config or not config.get("enabled") or not KEA_LEASES_FILE.exists():
         return []
@@ -1911,6 +2013,24 @@ async def interface_detail(name: str):
     raise HTTPException(404, "Interface not found")
 
 
+@app.get("/api/interfaces/{name}/addresses")
+async def interface_configured_addresses(name: str):
+    validate_ifname(name)
+    stage = interface_network_path(name, NETWORKD_STAGING_DIR)
+    live = interface_network_path(name)
+    path = stage if NETWORKD_STAGING_MARKER.exists() and stage.exists() else live
+    values = []
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip().startswith("Address="):
+                value = line.split("=", 1)[1].strip()
+                try:
+                    values.append(str(ipaddress.ip_interface(value)))
+                except ValueError:
+                    pass
+    return {"primary": values[0] if values else None, "additional_addresses": values[1:]}
+
+
 @app.put("/api/interfaces/{name}")
 async def update_interface(name: str, update: InterfaceUpdate):
     items = await get_interfaces()
@@ -1950,6 +2070,39 @@ async def update_interface(name: str, update: InterfaceUpdate):
         else:
             mode, address = None, None
 
+        # Additional addresses are explicit networkd Address= entries. None means
+        # retain existing entries; [] means remove all secondary addresses.
+        existing_addresses = []
+        for line in existing.splitlines():
+            if line.strip().startswith("Address="):
+                value = line.split("=", 1)[1].strip()
+                try:
+                    existing_addresses.append(str(ipaddress.ip_interface(value)))
+                except ValueError:
+                    pass
+        if update.additional_addresses is None:
+            secondary = (existing_addresses if mode == "dhcp" else existing_addresses[1:]) if existing_addresses else []
+        else:
+            if len(update.additional_addresses) > 32:
+                raise HTTPException(400, "Maximum 32 additional IP addresses")
+            secondary = []
+            for value in update.additional_addresses:
+                try:
+                    parsed = ipaddress.ip_interface(value.strip())
+                except (ValueError, AttributeError) as exc:
+                    raise HTTPException(400, f"Invalid additional IP address: {value}") from exc
+                normalized = str(parsed)
+                if normalized not in secondary:
+                    secondary.append(normalized)
+        if update.address:
+            primary = str(ipaddress.ip_interface(update.address))
+        elif existing_addresses:
+            primary = existing_addresses[0]
+        else:
+            primary = address
+        if mode != "dhcp" and primary in secondary:
+            raise HTTPException(400, "Additional IP address duplicates the primary address")
+
         if master:
             path = bridge_member_network_path(master, name, stage_dir)
             content = f"[Match]\nName={name}\n\n[Link]\n"
@@ -1958,6 +2111,11 @@ async def update_interface(name: str, update: InterfaceUpdate):
             if update.state in ("up", "down"):
                 content += f"ActivationPolicy={update.state}\n"
             content += f"\n[Network]\nBridge={master}\n"
+            if mode == "static" and primary:
+                content += f"Address={primary}\n"
+            elif mode == "dhcp":
+                content += "DHCP=ipv4\n"
+            content += "".join(f"Address={ip}\n" for ip in secondary)
         else:
             if mode is None:
                 content = f"[Match]\nName={name}\n\n[Link]\n"
@@ -1968,9 +2126,17 @@ async def update_interface(name: str, update: InterfaceUpdate):
                 content += "\n[Network]\n"
             else:
                 content = interface_network_content(name, mode, address, mtu, state=update.state)
+            if secondary:
+                content += "".join(f"Address={ip}\n" for ip in secondary)
             path = interface_network_path(name, stage_dir)
 
         write_staged_file(path, content)
+        # Persist the interface draft before acknowledging the request.  The
+        # middleware's best-effort write must not be the only persistence path.
+        persist_staging_json()
+        pending_files = _read_pending_config_json() or {}
+        if pending_files.get(path.name) != content:
+            raise HTTPException(500, "Interface draft was not saved to config.json")
         return {"name": name, "staged": True, "message": "Interface change staged; press Apply to activate it"}
     except HTTPException:
         raise
@@ -2093,8 +2259,8 @@ async def create_bridge(create: BridgeCreate):
 
 @app.delete("/api/bridges/{name}")
 async def delete_bridge(name: str):
-    if name in {"lo", "lan0", "wan0"}:
-        raise HTTPException(400, "Protected bridge")
+    if name == "lo":
+        raise HTTPException(400, "Loopback cannot be deleted")
     bridges_now = await get_bridges()
     current = next((b for b in bridges_now if b["name"] == name), None)
     if current is None:
@@ -2106,6 +2272,7 @@ async def delete_bridge(name: str):
         bridge_network_path(name, stage_dir),
     ]
     paths.extend(stage_dir.glob(f"{NETWORKD_PREFIX}{name}-member-*.network"))
+    # A bridge deletion must not leave its member configuration behind.
     removed = False
     for path in paths:
         if path.exists():
@@ -2114,7 +2281,14 @@ async def delete_bridge(name: str):
 
     if not removed:
         raise HTTPException(409, "Bridge is externally provisioned; it cannot be deleted by Router Manager")
-    return {"name": name, "staged": True, "message": "Router Manager bridge settings removed; externally provisioned device remains"}
+    return {"name": name, "staged": True, "message": "Bridge deletion staged; Apply Changes will detach members and remove the bridge device"}
+
+
+@app.get("/api/bridges/{name}/addresses")
+async def bridge_configured_addresses(name: str):
+    validate_ifname(name)
+    values = networkd_addresses_for(name, "bridge")
+    return {"primary": values[0] if values else None, "additional_addresses": values[1:]}
 
 
 @app.put("/api/bridges/{name}")
@@ -2155,6 +2329,15 @@ async def update_bridge(name: str, update: BridgeUpdate):
                 member_name = old_member.name[len(f"{NETWORKD_PREFIX}{name}-member-"):-len(".network")]
                 if member_name not in members:
                     old_member.unlink()
+        path = bridge_network_path(name, stage_dir)
+        previous = networkd_addresses_for(name, "bridge")
+        secondary = normalized_secondary_addresses(
+            update.additional_addresses if update.additional_addresses is not None else previous[1:], addr)
+        add_secondary_networkd_addresses(path, secondary)
+        persist_staging_json()
+        pending_files = _read_pending_config_json() or {}
+        if pending_files.get(path.name) != path.read_text():
+            raise HTTPException(500, "Bridge draft was not saved to config.json")
         return {"name": name, "staged": True, "message": "Bridge change staged; press Apply to activate it"}
     except HTTPException:
         raise
@@ -2220,6 +2403,13 @@ async def delete_vlan(name: str):
     return {"name": name, "staged": True, "message": "Router Manager VLAN settings removed; externally provisioned device remains"}
 
 
+@app.get("/api/vlans/{name}/addresses")
+async def vlan_configured_addresses(name: str):
+    validate_ifname(name)
+    values = networkd_addresses_for(name, "vlan")
+    return {"primary": values[0] if values else None, "additional_addresses": values[1:]}
+
+
 @app.put("/api/vlans/{name}")
 async def update_vlan(name: str, update: VlanUpdate):
     vlan = next((v for v in await get_vlans() if v["name"] == name), None)
@@ -2258,6 +2448,15 @@ async def update_vlan(name: str, update: VlanUpdate):
             write_staged_file(path, content)
         else:
             await write_vlan_networkd(name, parent, int(vlan_id), update.mtu or vlan.get("mtu"), mode, address, stage_dir, update.state)
+        path = vlan_network_path(name, stage_dir)
+        previous = networkd_addresses_for(name, "vlan")
+        secondary = normalized_secondary_addresses(
+            update.additional_addresses if update.additional_addresses is not None else previous[1:], address)
+        add_secondary_networkd_addresses(path, secondary)
+        persist_staging_json()
+        pending_files = _read_pending_config_json() or {}
+        if pending_files.get(path.name) != path.read_text():
+            raise HTTPException(500, "VLAN draft was not saved to config.json")
         return {"name": name, "staged": True, "message": "VLAN change staged; press Apply to activate it"}
     except HTTPException:
         raise
@@ -2268,7 +2467,13 @@ async def update_vlan(name: str, update: VlanUpdate):
 @app.get("/api/dashboard")
 async def dashboard():
     items = await get_interfaces()
-    wan = next((x for x in items if x["name"] == "wan0"), None)
+    # Prefer the routed WAN VLAN when present (e.g. wan0.12), otherwise
+    # use the WAN bridge or another WAN-like interface.
+    wan = next((x for x in items if x["name"] == "wan0.12"), None)
+    if wan is None:
+        wan = next((x for x in items if x["name"] == "wan0"), None)
+    if wan is None:
+        wan = next((x for x in items if x["name"].startswith("wan")), None)
     wan_name = wan["name"] if wan else None
     stats = await get_interface_stats(wan_name) if wan_name else {"rx_bytes": 0, "tx_bytes": 0}
 
@@ -2284,6 +2489,7 @@ async def dashboard():
         },
         "clients": clients,
         "traffic": {
+            "interface": wan_name,
             "rx_bytes": stats["rx_bytes"],
             "tx_bytes": stats["tx_bytes"],
             "download": "—",
@@ -2420,11 +2626,77 @@ async def config_status():
     }
 
 
+def _removed_bridge_members_from_staging() -> list[tuple[str, str]]:
+    """Find bridge memberships removed by the pending networkd file snapshot."""
+    if not NETWORKD_STAGING_MARKER.exists():
+        return []
+    staged = {p.name for p in NETWORKD_STAGING_DIR.glob(f"{NETWORKD_PREFIX}*") if p.is_file()}
+    removed = []
+    for path in NETWORKD_DIR.glob(f"{NETWORKD_PREFIX}*-member-*.network"):
+        if path.name in staged:
+            continue
+        suffix = path.name[len(NETWORKD_PREFIX):].removesuffix("-member-")
+        # Use the original file contents to identify the bridge and interface.
+        content = path.read_text()
+        bridge_match = re.search(r"(?m)^\s*Bridge\s*=\s*([\w.:-]+)\s*$", content)
+        name_match = re.search(r"(?m)^\s*Name\s*=\s*([\w.:-]+)\s*$", content)
+        if bridge_match and name_match:
+            removed.append((name_match.group(1), bridge_match.group(1)))
+    return removed
+
+
+async def _detach_removed_bridge_members(members: list[tuple[str, str]]) -> None:
+    """networkctl reconfigure does not reliably release a removed bridge port."""
+    for interface, old_bridge in members:
+        master_link = Path("/sys/class/net") / interface / "master"
+        if not master_link.exists():
+            continue
+        try:
+            current_master = master_link.resolve().name
+        except OSError:
+            continue
+        # Never detach an interface that has already been moved to another bridge.
+        if current_master != old_bridge:
+            continue
+        await run_command("ip", "link", "set", "dev", interface, "nomaster")
+
+
+def _bridges_deleted_from_staging() -> list[str]:
+    """Only delete devices whose manager-owned bridge .netdev was removed."""
+    if not NETWORKD_STAGING_MARKER.exists():
+        return []
+    deleted = []
+    for active in NETWORKD_DIR.glob(f"{NETWORKD_PREFIX}*.netdev"):
+        if (NETWORKD_STAGING_DIR / active.name).exists():
+            continue
+        content = active.read_text()
+        if re.search(r"(?im)^\s*Kind\s*=\s*bridge\s*$", content):
+            deleted.extend(_networkd_names_from_netdev(content))
+    return sorted(set(deleted))
+
+
+async def _delete_bridge_devices(bridges: list[str]) -> None:
+    for bridge in bridges:
+        if bridge == "lo":
+            continue
+        sys_bridge = Path("/sys/class/net") / bridge / "bridge"
+        if not sys_bridge.exists():
+            continue
+        members_dir = Path("/sys/class/net") / bridge / "brif"
+        if members_dir.is_dir():
+            for member in list(members_dir.iterdir()):
+                await run_command("ip", "link", "set", "dev", member.name, "nomaster")
+        await run_command("ip", "link", "delete", "dev", bridge, "type", "bridge")
+
+
 async def apply_staged_networkd() -> list[str]:
     if not has_pending_config():
         return []
     ensure_networkd_dir()
     names: set[str] = set()
+    removed_bridge_members = _removed_bridge_members_from_staging()
+    deleted_bridges = _bridges_deleted_from_staging()
+    names.update(interface for interface, _ in removed_bridge_members)
     pending_payload = _pending_json_payload()
     applied_payload = _read_applied_config_json() or {"version": 1, "files": {}, "routes": []}
     kea_dhcp = pending_payload.get("kea_dhcp", applied_payload.get("kea_dhcp"))
@@ -2473,8 +2745,14 @@ async def apply_staged_networkd() -> list[str]:
     names.update(_apply_static_routes_to_networkd(routes))
     await _remove_legacy_route_service()
 
-    if names:
-        await networkd_reload(*sorted(names))
+    # Deleted bridge devices no longer have networkd configuration to reconfigure.
+    reconfigure_names = sorted(names.difference(deleted_bridges))
+    await networkd_reload(*reconfigure_names)
+    # Deleting a Bridge= assignment from a .network file does not reliably
+    # release the kernel bridge membership. Apply the removal immediately.
+    await _detach_removed_bridge_members(removed_bridge_members)
+    # Removing the .netdev file alone leaves the kernel bridge alive until reboot.
+    await _delete_bridge_devices(deleted_bridges)
     if kea_dhcp is not None:
         await _apply_kea_dhcp_config(kea_dhcp)
     firewall_cfg = pending_payload.get("firewall")
@@ -2529,6 +2807,12 @@ async def get_dhcp_config():
         config = _default_kea_dhcp_config(interfaces)
     service, active, enabled = await _kea_service_state()
     leases = _read_kea_leases(config)
+    aliases = applied.get("dhcp_lease_aliases", {})
+    for lease in leases:
+        try:
+            lease["alias_hostname"] = aliases.get(_canonical_mac(lease["mac"]), "")
+        except ValueError:
+            lease["alias_hostname"] = ""
     return {
         "config": config,
         "service": service,
@@ -2537,6 +2821,7 @@ async def get_dhcp_config():
         "installed": bool(shutil.which("kea-dhcp4")) and service is not None,
         "config_path": str(KEA_DHCP4_CONFIG),
         "leases": leases,
+        "lease_aliases": aliases,
         "interfaces": [
             {"name": item["name"], "type": item.get("type"), "addresses": item.get("addresses", [])}
             for item in interfaces if item["name"] != "lo"

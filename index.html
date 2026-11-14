@@ -727,9 +727,6 @@
       <button class="nav-item" data-page="dhcp">
         <span class="nav-icon">▣</span><span class="nav-label">DHCP</span>
       </button>
-      <button class="nav-item" data-page="dns">
-        <span class="nav-icon">⌁</span><span class="nav-label">DNS</span>
-      </button>
       <button class="nav-item" data-page="vpn">
         <span class="nav-icon">⌁</span><span class="nav-label">VPN</span>
       </button>
@@ -808,13 +805,15 @@
                 <h2>WAN Traffic</h2>
                 <span>Last 60 seconds</span>
               </div>
-              <span class="mono" id="dashboardTrafficSummary">Live interface counters</span>
+              <span class="mono" id="dashboardTrafficSummary">Waiting for WAN samples</span>
             </div>
             <div class="card-body">
               <div class="traffic">
                 <div class="traffic-grid"></div>
-                <div class="traffic-line down"></div>
-                <div class="traffic-line up"></div>
+                <svg id="wanTrafficChart" viewBox="0 0 700 230" preserveAspectRatio="none" role="img" aria-label="Live WAN download and upload rates" style="position:absolute;inset:0;width:100%;height:100%">
+                  <polyline id="wanDownloadLine" fill="none" stroke="#7eb0ff" stroke-width="2.5" vector-effect="non-scaling-stroke" points=""></polyline>
+                  <polyline id="wanUploadLine" fill="none" stroke="#70e4b5" stroke-width="2.5" vector-effect="non-scaling-stroke" points=""></polyline>
+                </svg>
               </div>
               <div class="traffic-legend">
                 <span><i class="legend-dot"></i>Download</span>
@@ -934,7 +933,17 @@
 
       <!-- DHCP -->
       <div class="page" id="page-dhcp">
-        <div class="grid two-col">
+        <div class="grid" style="grid-template-columns:minmax(0,1fr)">
+          <div class="card">
+            <div class="card-header"><div><h2>Active DHCP Leases</h2><span>Kea memfile lease database</span></div><span class="badge" id="keaLeaseCount">0 leases</span></div>
+            <div class="table-wrap">
+              <table id="keaLeasesTable">
+                <thead><tr><th>Address</th><th>MAC</th><th>Hostname</th><th>Alias hostname</th><th>Remaining</th></tr></thead>
+                <tbody><tr><td colspan="5" class="mono">Loading Kea leases…</td></tr></tbody>
+              </table>
+            </div>
+            <div class="card-body"><div class="muted" id="keaLeaseInfo" style="font-size:12px">Leases are read from /var/lib/kea/kea-leases4.csv.</div></div>
+          </div>
           <div class="card">
             <div class="card-header">
               <div><h2>Kea DHCPv4 Server</h2><span>Configuration is staged in JSON; Apply Changes activates it</span></div>
@@ -975,45 +984,6 @@
                 </div>
               </form>
               <p class="muted" style="font-size:12px;margin:14px 0 0">Saving updates the <code>pending</code> section in <code>/var/lib/router-manager/config.json</code>. The Apply Changes button validates the configuration with <code>kea-dhcp4 -t</code>, writes <code>/etc/kea/kea-dhcp4.conf</code>, and enables/restarts the Kea service. Undo Changes removes the pending section without changing the applied configuration. Disable any other DHCP server (such as dnsmasq DHCP) on this LAN first; multiple DHCP servers can issue conflicting leases.</p>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><div><h2>Active DHCP Leases</h2><span>Kea memfile lease database</span></div><span class="badge" id="keaLeaseCount">0 leases</span></div>
-            <div class="table-wrap">
-              <table id="keaLeasesTable">
-                <thead><tr><th>Address</th><th>MAC</th><th>Hostname</th><th>Remaining</th></tr></thead>
-                <tbody><tr><td colspan="4" class="mono">Loading Kea leases…</td></tr></tbody>
-              </table>
-            </div>
-            <div class="card-body"><div class="muted" id="keaLeaseInfo" style="font-size:12px">Leases are read from /var/lib/kea/kea-leases4.csv.</div></div>
-          </div>
-        </div>
-      </div>
-
-      <!-- DNS -->
-      <div class="page" id="page-dns">
-        <div class="grid two-col">
-          <div class="card">
-            <div class="card-header"><h2>DNS Resolver</h2><span>dnsmasq</span></div>
-            <div class="card-body">
-              <div class="form-grid">
-                <div class="form-group full"><label>Upstream DNS servers</label><input class="input" value="1.1.1.1, 8.8.8.8"></div>
-                <div class="form-group"><label>Local domain</label><input class="input" value="lan"></div>
-                <div class="form-group"><label>Cache size</label><input class="input" value="1000"></div>
-              </div>
-              <div class="switch-row" style="margin-top:14px">
-                <div><strong style="font-size:13px">DNS caching</strong><div class="iface-meta">Cache repeated queries locally</div></div>
-                <button class="switch on" onclick="toggleSwitch(this)"></button>
-              </div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><h2>DNS Statistics</h2><span>Last hour</span></div>
-            <div class="card-body">
-              <div class="stat-value">12,481</div>
-              <div class="stat-sub">Queries</div>
-              <div style="margin-top:22px" class="positive">91.4% cache hit rate</div>
-              <div style="margin-top:8px" class="stat-sub">1,074 upstream requests</div>
             </div>
           </div>
         </div>
@@ -1202,7 +1172,63 @@
     return data;
   });
 
+  // Derive rates from kernel byte counters. Keep the last 60 seconds in
+  // browser memory; a counter reset or WAN change starts a fresh series.
+  const wanTrafficHistory = [];
+  let wanTrafficPrevious = null;
+  let dashboardRequestInFlight = false;
+  function formatTrafficRate(bytesPerSecond) {
+    if (!Number.isFinite(bytesPerSecond)) return "—";
+    const units = ["bps", "Kbps", "Mbps", "Gbps", "Tbps"];
+    let n = Math.max(0, bytesPerSecond * 8), i = 0;
+    while (n >= 1000 && i < units.length - 1) { n /= 1000; i++; }
+    return `${n.toFixed(1)} ${units[i]}`;
+  }
+  function updateWanTraffic(traffic) {
+    const iface = traffic?.interface || null;
+    const rx = Number(traffic?.rx_bytes), tx = Number(traffic?.tx_bytes);
+    const now = performance.now();
+    const valid = iface && Number.isFinite(rx) && Number.isFinite(tx) && rx >= 0 && tx >= 0;
+    const summary = document.getElementById("dashboardTrafficSummary");
+    if (!valid) {
+      wanTrafficPrevious = null;
+      wanTrafficHistory.length = 0;
+      if (summary) summary.textContent = "No WAN interface counters available";
+      drawWanTraffic();
+      return;
+    }
+    const prev = wanTrafficPrevious;
+    if (prev && prev.iface === iface && rx >= prev.rx && tx >= prev.tx && now > prev.now) {
+      const dt = (now - prev.now) / 1000;
+      wanTrafficHistory.push({time: now, down: (rx - prev.rx) / dt, up: (tx - prev.tx) / dt});
+      if (summary) summary.textContent = `${iface} · ↓ ${formatTrafficRate((rx-prev.rx)/dt)} · ↑ ${formatTrafficRate((tx-prev.tx)/dt)}`;
+    } else {
+      wanTrafficHistory.length = 0;
+      if (summary) summary.textContent = `${iface} · collecting samples…`;
+    }
+    wanTrafficPrevious = {iface, rx, tx, now};
+    while (wanTrafficHistory.length && wanTrafficHistory[0].time < now - 60000) wanTrafficHistory.shift();
+    drawWanTraffic();
+  }
+  function drawWanTraffic() {
+    const down = document.getElementById("wanDownloadLine");
+    const up = document.getElementById("wanUploadLine");
+    if (!down || !up) return;
+    const history = wanTrafficHistory;
+    const latest = wanTrafficPrevious?.now || performance.now();
+    const max = Math.max(1, ...history.map(p => Math.max(p.down, p.up)));
+    const points = key => history.map(p => {
+      const x = Math.max(0, Math.min(700, 700 - (latest - p.time) * 700 / 60000));
+      const y = 218 - (p[key] / max) * 200;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    down.setAttribute("points", points("down"));
+    up.setAttribute("points", points("up"));
+  }
+
   async function loadDashboard() {
+    if (dashboardRequestInFlight) return;
+    dashboardRequestInFlight = true;
     try {
       const data = await api("/api/dashboard");
       const internet = document.getElementById("dashboardInternet");
@@ -1221,13 +1247,16 @@
       if (wanAddress) wanAddress.textContent = data.internet?.address || "—";
       if (clients) clients.textContent = data.clients ?? "—";
       if (cpu) cpu.textContent = data.system?.cpu_percent != null ? `${data.system.cpu_percent}%` : "—";
-      if (traffic) traffic.textContent = `${formatBytes(data.traffic?.rx_bytes)} ↓ · ${formatBytes(data.traffic?.tx_bytes)} ↑`;
+      updateWanTraffic(data.traffic);
 
       renderDashboardInterfaces(data.interfaces || []);
       renderRecentEvents(data.recent_events || []);
       renderInterfaces(data.interfaces || []);
     } catch (err) {
+      if (traffic) traffic.textContent = "Traffic unavailable";
       showToast("Dashboard API error: " + err.message);
+    } finally {
+      dashboardRequestInFlight = false;
     }
   }
 
@@ -1250,7 +1279,7 @@
     items.forEach(i => (groups[i.category] || groups.other).push(i));
     body.innerHTML = Object.entries(groups).filter(([, list]) => list.length).map(([key, list]) => `
       <div class="dashboard-interface-group">
-        <div class="dashboard-interface-group-title">${labels[key]}<span>${list.length}</span></div>
+        <div class="dashboard-interface-group-title">${labels[key]} (${list.length})</div>
         ${list.map(i => {
           const detail = key === "vlans" && i.parent ? `VLAN ${i.vlan_id ?? "?"} on ${i.parent}` : ((i.addresses || []).join(", ") || "No address");
           return `<div class="interface-row"><div><div class="iface-name">${escapeHtml(i.name)}</div><div class="iface-meta">${escapeHtml(detail)}</div></div><span class="badge ${i.operstate === "up" ? "up" : "down"}">${escapeHtml(i.operstate)}</span><span>${escapeHtml(i.speed || "—")}</span><span class="mono">${escapeHtml(String(i.mtu ?? "—"))}</span></div>`;
@@ -1658,14 +1687,30 @@
       document.getElementById("keaLeaseCount").textContent = `${leases.length} lease${leases.length === 1 ? "" : "s"}`;
       const body = document.querySelector("#keaLeasesTable tbody");
       body.innerHTML = leases.length ? leases.map(lease => `
-        <tr><td class="mono">${escapeHtml(lease.address)}</td><td class="mono">${escapeHtml(lease.mac || "—")}</td><td>${escapeHtml(lease.hostname || "—")}</td><td>${formatLeaseRemaining(lease.remaining_seconds)}</td></tr>
-      `).join("") : '<tr><td colspan="4" class="mono">No active Kea leases found.</td></tr>';
+        <tr><td class="mono">${escapeHtml(lease.address)}</td><td class="mono">${escapeHtml(lease.mac || "—")}</td><td>${escapeHtml(lease.hostname || "—")}</td><td><div style="display:flex;gap:6px;align-items:center"><input class="input" style="min-width:120px;max-width:220px" aria-label="Alias hostname for ${escapeHtml(lease.mac)}" data-lease-alias-mac="${escapeHtml(lease.mac)}" value="${escapeHtml(lease.alias_hostname || "")}" placeholder="Alias hostname"><button class="btn" onclick="saveLeaseAlias(this)">Save</button></div></td><td>${formatLeaseRemaining(lease.remaining_seconds)}</td></tr>
+      `).join("") : '<tr><td colspan="5" class="mono">No active Kea leases found.</td></tr>';
       document.getElementById("keaLeaseInfo").textContent = `Lease database: ${data.config?.enabled ? "/var/lib/kea/kea-leases4.csv" : "DHCP disabled"}`;
     } catch (err) {
       const status = document.getElementById("keaStatus");
       status.textContent = "Unavailable";
       status.className = "badge down";
       showToast("Could not load Kea DHCP configuration: " + err.message);
+    }
+  }
+
+  async function saveLeaseAlias(button) {
+    const input = button.parentElement.querySelector("[data-lease-alias-mac]");
+    const mac = input.dataset.leaseAliasMac;
+    const alias = input.value;
+    button.disabled = true;
+    try {
+      await api("/api/dhcp/lease-alias", {method: "PUT", body: JSON.stringify({mac, alias})});
+      showToast(alias ? "Alias hostname saved" : "Alias hostname removed");
+      await loadDhcp();
+    } catch (err) {
+      showToast("Could not save alias: " + err.message);
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -1712,7 +1757,6 @@
     routing: ["Routing", "Kernel routing table and static routes"],
     firewall: ["Firewall", "Live nftables rules and chains"],
     dhcp: ["DHCP", "DHCP server configuration and active leases"],
-    dns: ["DNS", "Local resolver, cache and upstream DNS"],
     vlans: ["VLANs", "802.1Q VLAN configuration"],
     vpn: ["VPN", "WireGuard tunnels and peers"],
     logs: ["Logs", "System and network service logs"],
@@ -1882,6 +1926,15 @@
       `<div class="form-help" id="cfg_address_help">Enter an IPv4 address including CIDR, for example 192.168.1.1/24.</div>`;
   }
 
+  function additionalAddressFields() {
+    return `<div class="form-group"><label>Additional IP addresses (one CIDR per line)</label><textarea class="input" id="cfg_additional_addresses" rows="4" placeholder="192.168.10.1/24\n2001:db8::1/64"></textarea><small>Each address is written as a separate Address= entry. Removing a line removes that address from the staged configuration.</small></div>`;
+  }
+
+  async function loadAdditionalAddresses(kind, name) {
+    const data = await api("/api/" + kind + "/" + encodeURIComponent(name) + "/addresses");
+    document.getElementById("cfg_additional_addresses").value = (data.additional_addresses || []).join("\n");
+  }
+
   function toggleAddressField() {
     const mode = cfg("address_mode");
     const input = document.getElementById("cfg_address");
@@ -1937,7 +1990,9 @@
       document.getElementById("configMode").value = "edit-interface";
       document.getElementById("configName").value = name;
       document.getElementById("modalTitle").textContent = "Edit Interface — " + name;
-      document.getElementById("configFields").innerHTML = field("IP address / prefix (leave blank to keep)", "address", data.addresses?.find(x => x.indexOf(":") < 0) || "", "text") + field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>`;
+      document.getElementById("configFields").innerHTML = field("Primary IPv4 / prefix (leave blank to keep)", "address", data.addresses?.find(x => x.indexOf(":") < 0) || "", "text") + `<div class="form-group"><label>Additional IP addresses (one CIDR per line)</label><textarea class="input" id="cfg_additional_addresses" rows="4" placeholder="172.16.2.10/24\n172.16.2.11/24"></textarea><small>These are persistent systemd-networkd addresses. Remove a line to delete that additional address.</small></div>` + field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>`;
+      const addressData = await api("/api/interfaces/" + encodeURIComponent(name) + "/addresses");
+      document.getElementById("cfg_additional_addresses").value = (addressData.additional_addresses || []).join("\n");
       document.getElementById("configModal").classList.add("show");
     } catch (err) { showToast("Interface lookup failed: " + err.message); }
   }
@@ -1949,14 +2004,20 @@
     document.getElementById("configMode").value = "edit-bridge"; document.getElementById("configName").value = name;
     document.getElementById("modalTitle").textContent = "Edit Bridge — " + name;
     const items = await getAvailableInterfaces("bridge-member", data.members || []);
-    document.getElementById("configFields").innerHTML = `<div class="form-group"><label>STP</label><select class="input" id="cfg_stp"><option value="${data.stp_enabled ? "true" : "false"}">${data.stp_enabled ? "Enabled" : "Disabled"}</option><option value="${data.stp_enabled ? "false" : "true"}">${data.stp_enabled ? "Disabled" : "Enabled"}</option></select></div>` + interfaceMultiSelect(items, data.members || []) + addressFields("bridge", ipv4 ? "static" : "static", ipv4);
+    document.getElementById("configFields").innerHTML = `<div class="form-group"><label>STP</label><select class="input" id="cfg_stp"><option value="${data.stp_enabled ? "true" : "false"}">${data.stp_enabled ? "Enabled" : "Disabled"}</option><option value="${data.stp_enabled ? "false" : "true"}">${data.stp_enabled ? "Disabled" : "Enabled"}</option></select></div>` + interfaceMultiSelect(items, data.members || []) + addressFields("bridge", ipv4 ? "static" : "static", ipv4) + additionalAddressFields();
     document.getElementById("configModal").classList.add("show");
     toggleAddressField();
+    await loadAdditionalAddresses("bridges", name);
   }
 
   async function deleteBridge(name) {
-    if (!window.confirm(`Stage deletion of bridge ${name}? The live system will not change until Apply Changes is pressed.`)) return;
     try {
+      const bridge = (await api("/api/bridges")).find(b => b.name === name);
+      if (!bridge) throw new Error("Bridge not found");
+      const members = (bridge.members || []).join(", ") || "none";
+      const addresses = (bridge.addresses || []).join(", ") || "none";
+      const warning = `Stage deletion of bridge ${name}?\n\nMember interfaces: ${members}\nIP addresses: ${addresses}\n\nThe bridge and its IP addresses will be removed, and members detached, ONLY when you press Apply Changes. This may disconnect the web interface or WAN. Use local console access for critical bridges.\n\nContinue?`;
+      if (!window.confirm(warning)) return;
       await api("/api/bridges/" + encodeURIComponent(name), {method:"DELETE"});
       showToast(`Bridge ${name} deletion staged`);
       refreshCurrentPage();
@@ -1969,9 +2030,10 @@
     const ipv4 = (data.addresses || []).find(x => x.indexOf(".") >= 0) || "";
     document.getElementById("configMode").value = "edit-vlan"; document.getElementById("configName").value = name;
     document.getElementById("modalTitle").textContent = "Edit VLAN — " + name;
-    document.getElementById("configFields").innerHTML = field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>` + addressFields("vlan", ipv4 ? "static" : "static", ipv4);
+    document.getElementById("configFields").innerHTML = field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>` + addressFields("vlan", ipv4 ? "static" : "static", ipv4) + additionalAddressFields();
     document.getElementById("configModal").classList.add("show");
     toggleAddressField();
+    await loadAdditionalAddresses("vlans", name);
   }
 
   async function deleteVlan(name) {
@@ -1990,12 +2052,20 @@
     const mode = document.getElementById("configMode").value, name = document.getElementById("configName").value;
     try {
       let result;
-      if (mode === "add-bridge") result = await api("/api/bridges", {method:"POST", body:JSON.stringify({name:cfg("name"), stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      if (mode === "add-bridge") result = await api("/api/bridges", {method:"POST", body:JSON.stringify({name:cfg("name"), stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});
       else if (mode === "add-vlan") result = await api("/api/vlans", {method:"POST", body:JSON.stringify({name:cfg("name"), parent:cfg("parent"), vlan_id:num("vlan_id"), mtu:num("mtu"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
-      else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address:cfg("address")||null, mtu:num("mtu"), state:cfg("state")||null})});
+      else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean), mtu:num("mtu"), state:cfg("state")||null})});
       else if (mode === "edit-bridge") result = await api("/api/bridges/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
-      else if (mode === "edit-vlan") result = await api("/api/vlans/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({mtu:num("mtu"), state:cfg("state")||null, address_mode:cfg("address_mode"), address:cfg("address")||null})});
-      closeConfigModal(); showToast("Configuration updated"); refreshCurrentPage();
+      else if (mode === "edit-vlan") result = await api("/api/vlans/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({mtu:num("mtu"), state:cfg("state")||null, address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});
+      if (result && result.staged) {
+        const status = await api("/api/config/status");
+        closeConfigModal();
+        showToast(status.pending && status.count ? "Change staged — press Apply Changes" : "No configuration differences to apply");
+      } else {
+        closeConfigModal();
+        showToast("Configuration updated");
+      }
+      refreshCurrentPage();
     } catch (err) { showToast("Configuration failed: " + err.message); }
   }
   function cfg(id) { const e=document.getElementById("cfg_"+id); return e ? e.value : ""; }
@@ -2063,7 +2133,7 @@
   setInterval(() => {
     loadConfigStatus();
     if ((location.hash.replace("#", "") || "dashboard") === "dashboard") loadDashboard();
-  }, 5000);
+  }, 2000);
 </script>
 </body>
 </html>
