@@ -333,25 +333,34 @@ def _normalize_firewall(raw: dict) -> dict:
 
 
 def _firewall_script(cfg: dict) -> str:
-    """Render only Router Manager-owned tables; do not flush unrelated rules."""
+    """Protect ingress on selected interfaces for INPUT and FORWARD.
+
+    A drop-policy base chain is used when protection is enabled. Traffic arriving
+    on other interfaces is explicitly accepted so toggling one interface does
+    not unexpectedly firewall the others. Established/related traffic is allowed
+    for protected interfaces; all other inbound packets are dropped. Port
+    forwards do not bypass this rule: an explicit allow-rule UI is required
+    before unsolicited inbound connections can be permitted.
+    """
     q = json.dumps
-    lines = [
-        "table inet router_manager_filter {",
-        " chain forward { type filter hook forward priority -5; policy accept;",
-        "  ct state established,related accept",
-        "  ct state invalid drop",
-    ]
-    # DNAT happens before forward filtering. Accept translated port forwards first.
-    for rule in cfg["pat"]:
-        lines.append(
-            f'  iifname {q(rule["inbound"])} ip daddr {rule["target"]} '
-            f'ip protocol {rule["protocol"]} {rule["protocol"]} dport {rule["internal_port"]} '
-            f'ct status dnat accept'
-        )
-    # Protected interfaces drop unsolicited forwarded traffic only.
-    for iface in cfg["interfaces"]:
-        lines.append(f'  iifname {q(iface)} ct state new drop')
-    lines += [" }", "}", "table ip router_manager_nat {",
+    protected = cfg["interfaces"]
+    lines = ["table inet router_manager_filter {"]
+    for chain in ("input", "forward"):
+        policy = "drop" if protected else "accept"
+        lines.append(f" chain {chain} {{ type filter hook {chain} priority -5; policy {policy};")
+        if protected:
+            # Accept only traffic entering through an unprotected interface.
+            # An explicit set expression handles multiple protected interfaces.
+            names = ", ".join(q(name) for name in protected)
+            if len(protected) == 1:
+                lines.append(f"  iifname != {q(protected[0])} accept")
+            else:
+                lines.append(f"  iifname != {{ {names} }} accept")
+            lines.append("  ct state established,related accept")
+            # No NEW accept: even DNAT traffic remains blocked until an
+            # explicit firewall allow feature is implemented.
+        lines.append(" }")
+    lines += ["}", "table ip router_manager_nat {",
               " chain prerouting { type nat hook prerouting priority dstnat; policy accept;"]
     for rule in cfg["pat"]:
         lines.append(
@@ -1822,38 +1831,64 @@ async def set_dhcp_lease_alias(update: LeaseAliasUpdate):
 
 
 def _read_kea_leases(config: dict) -> list[dict]:
-    if not config or not config.get("enabled") or not KEA_LEASES_FILE.exists():
+    """Read Kea memfile's LFC snapshot followed by its active journal.
+
+    During lease-file cleanup, .2 can hold the compacted/older lease state
+    while the primary CSV contains only new mutations (or just its header).
+    A newer row, including an expired or non-default-state row, supersedes an
+    older row for the same address. Never write to Kea-managed files.
+    """
+    if not config or not config.get("enabled"):
         return []
-    now = int(time.time())
-    leases: list[dict] = []
-    try:
-        with KEA_LEASES_FILE.open("r", newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                try:
-                    expires = int(row.get("expire", "0"))
-                    state = int(row.get("state", "0") or 0)
-                    if expires <= now or state != 0:
+
+    # The .2 file is the LFC snapshot and the base file is the live journal.
+    # Read the snapshot first regardless of mtime: LFC may update timestamps
+    # independently of the logical order of lease mutations.
+    paths = [Path(str(KEA_LEASES_FILE) + ".2"), KEA_LEASES_FILE]
+    latest: dict[str, dict] = {}
+    read_any = False
+    for path in paths:
+        try:
+            with path.open("r", newline="", encoding="utf-8") as handle:
+                read_any = True
+                for row in csv.DictReader(handle):
+                    address = (row.get("address") or "").strip()
+                    try:
+                        ipaddress.IPv4Address(address)
+                        expires = int(row.get("expire") or 0)
+                        state = int(row.get("state") or 0)
+                    except (ipaddress.AddressValueError, TypeError, ValueError):
                         continue
-                    leases.append({
-                        "address": row.get("address", ""),
+                    # Do not discard tombstones here: they must invalidate
+                    # earlier active rows from the LFC snapshot.
+                    latest[address] = {
+                        "address": address,
                         "mac": row.get("hwaddr", ""),
                         "hostname": row.get("hostname", "") or "—",
                         "expires_at": expires,
-                        "remaining_seconds": max(0, expires - now),
-                    })
-                except (TypeError, ValueError):
-                    continue
-    except OSError:
-        return []
-    valid_leases = []
-    for lease in leases:
-        try:
-            ipaddress.IPv4Address(lease["address"])
-            valid_leases.append(lease)
-        except ipaddress.AddressValueError:
+                        "state": state,
+                    }
+        except FileNotFoundError:
             continue
-    return sorted(valid_leases, key=lambda item: int(ipaddress.ip_address(item["address"])))
+        except (OSError, UnicodeError, csv.Error) as exc:
+            logging.warning("Cannot read Kea lease file %s: %s", path, exc)
+            continue
+
+    if not read_any:
+        return []
+    now = int(time.time())
+    leases = []
+    for row in latest.values():
+        if row["state"] != 0 or row["expires_at"] <= now:
+            continue
+        leases.append({
+            "address": row["address"],
+            "mac": row["mac"],
+            "hostname": row["hostname"],
+            "expires_at": row["expires_at"],
+            "remaining_seconds": row["expires_at"] - now,
+        })
+    return sorted(leases, key=lambda item: int(ipaddress.IPv4Address(item["address"])))
 
 
 async def run_command(*args: str) -> str:
@@ -2259,6 +2294,76 @@ async def get_dashboard_neighbors() -> list[dict[str, str]]:
     return sorted(latest_by_ip.values(), key=lambda n: (n["interface"], ipaddress.ip_address(n["ip"]).version, int(ipaddress.ip_address(n["ip"]))))
 
 
+async def get_dashboard_combined_neighbors() -> list[dict[str, str]]:
+    """Combine kernel neighbors with committed, active Kea DHCP leases.
+
+    A lease with no ARP entry is still shown. Match its interface only when
+    its address belongs to exactly one configured interface subnet.
+    """
+    neighbors = await get_dashboard_neighbors()
+    applied = _read_applied_config_json() or {}
+    config = applied.get("kea_dhcp")
+    leases = _read_kea_leases(config) if isinstance(config, dict) else []
+    aliases = applied.get("dhcp_lease_aliases", {})
+    if not isinstance(aliases, dict):
+        aliases = {}
+
+    # Infer the interface from its assigned subnet, without assigning a
+    # misleading interface if multiple networks overlap.
+    subnet_interfaces = []
+    try:
+        for iface in await get_interfaces():
+            for address in iface.get("addresses", []):
+                try:
+                    net = ipaddress.ip_interface(address).network
+                    if net.version == 4:
+                        subnet_interfaces.append((net, iface["name"]))
+                except (ValueError, TypeError, KeyError):
+                    continue
+    except Exception as exc:
+        logging.warning("Unable to map DHCP leases to interfaces: %s", exc)
+
+    by_ip = {}
+    for neighbor in neighbors:
+        by_ip.setdefault(neighbor["ip"], []).append(neighbor)
+        neighbor["source"] = "ARP"
+        neighbor["hostname"] = ""
+
+    for lease in leases:
+        ip = lease["address"]
+        mac = lease.get("mac", "")
+        hostname = lease.get("hostname", "")
+        if hostname == "—":
+            hostname = ""
+        try:
+            canonical = _canonical_mac(mac)
+        except ValueError:
+            canonical = ""
+        matched = [n for n in by_ip.get(ip, []) if n.get("mac") == canonical]
+        if matched:
+            for n in matched:
+                n["source"] = "ARP + DHCP"
+                n["hostname"] = hostname
+            continue
+        # A different MAC at this IP indicates a potentially stale neighbor;
+        # retain both observations instead of silently conflating devices.
+        candidate = ipaddress.IPv4Address(ip)
+        names = {name for net, name in subnet_interfaces if candidate in net}
+        iface = next(iter(names)) if len(names) == 1 else "DHCP (interface unknown)"
+        entry = {
+            "ip": ip, "mac": canonical or mac,
+            "alias_hostname": aliases.get(canonical, "") if canonical else "",
+            "hostname": hostname, "interface": iface,
+            "state": "ACTIVE LEASE", "source": "DHCP",
+        }
+        neighbors.append(entry)
+        by_ip.setdefault(ip, []).append(entry)
+    return sorted(neighbors, key=lambda n: (
+        n["interface"], ipaddress.ip_address(n["ip"]).version,
+        int(ipaddress.ip_address(n["ip"])), n["source"]
+    ))
+
+
 async def get_log_lines(lines: int = 50) -> list[str]:
     lines = max(1, min(lines, 500))
     if not shutil.which("journalctl"):
@@ -2524,9 +2629,24 @@ async def dashboard():
 
     # These values are intentionally live-only. If the router does not expose a
     # value, return null rather than inventing a value for the dashboard.
-    clients = await get_neighbor_count("lan0") if any(x["name"] == "lan0" for x in items) else 0
     logs = await get_log_lines(4)
-    neighbors = await get_dashboard_neighbors()
+    neighbors = await get_dashboard_combined_neighbors()
+    # Count distinct LAN devices from the same merged data as the Neighbors
+    # table. A client seen through both ARP and DHCP must count only once.
+    # DHCP-only entries with an unknown interface still represent clients
+    # served by the locally configured Kea DHCP server.
+    lan_clients = set()
+    for neighbor in neighbors:
+        interface = neighbor.get("interface", "")
+        source = neighbor.get("source", "")
+        if interface != "lan0" and not (
+            "DHCP" in source and interface == "DHCP (interface unknown)"
+        ):
+            continue
+        mac = str(neighbor.get("mac", "")).strip().lower()
+        ip = str(neighbor.get("ip", "")).strip()
+        lan_clients.add(("mac", mac) if mac else ("ip", ip))
+    clients = len(lan_clients)
 
     return {
         "internet": {

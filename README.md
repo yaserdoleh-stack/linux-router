@@ -172,3 +172,35 @@ This is display-only metadata; it does not alter Kea reservations, client-suppli
 hostnames, or DNS records. Only active leases appear in the table.
 
 DHCP lease aliases accept arbitrary Unicode characters, punctuation and whitespace. Aliases are stored exactly as entered (an empty string removes the alias). They are display labels, not DNS hostnames.
+
+### Kea memfile lease visibility
+
+The DHCP Active Leases view now reads `/var/lib/kea/kea-leases4.csv.2`
+(the LFC snapshot) followed by `/var/lib/kea/kea-leases4.csv` (the active
+journal). Rows are reconciled by IPv4 address; newer rows override older
+records, including expired and non-active records. Only unexpired leases in
+state 0 are displayed. This is read-only and does not change Kea's lease
+database or restart the DHCP service. The implementation is tailored to the
+observed `.2` + primary-file layout; for other LFC intermediate states,
+a Kea lease-query API is preferable for a fully authoritative view.
+
+### Dashboard LAN Clients count
+
+The LAN Clients card counts distinct MAC addresses (falling back to IP if no MAC) from the combined Neighbors data: lan0 ARP entries plus active Kea DHCP leases. A device appearing in both sources is counted once. DHCP-only leases whose interface cannot be inferred are included.
+
+### Interface firewall behavior (strict ingress)
+
+When an interface firewall checkbox is enabled and **Apply Changes** is used,
+Router Manager creates nftables `inet` **input** and **forward** base chains
+with `policy drop`. Traffic **entering** on a selected protected interface
+is allowed only when conntrack state is `established` or `related`. Traffic
+entering on other interfaces is explicitly accepted by these managed chains.
+Disabling all interface checkboxes restores `policy accept` in these chains.
+
+**WARNING:** New connections to the router (including its web UI and SSH),
+new forwarded traffic, and DHCP requests arriving on a protected interface
+will be blocked. NAT and port-forward entries do **not** override this rule.
+Do not protect a management or LAN interface until explicit allow rules are
+available. Apply only from a local console or with independent recovery access.
+Other nftables base chains can still independently drop traffic; an `accept`
+verdict in one base chain does not override drops in another.
