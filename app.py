@@ -3039,6 +3039,9 @@ async def stage_restored_config(payload: dict = Body(...)):
     applied = _read_applied_config_json()
     if applied is None:
         applied = _bootstrap_applied_config_json()
+    if ((applied.get("kea_dhcp") or {}).get("ha_enabled") and
+            (applied.get("kea_dhcp") or {}).get("ha_role") == "backup" and kea is not None):
+        raise HTTPException(403, "Cannot restore Kea DHCP configuration on an HA backup; synchronize from the primary")
     if kea is None and applied.get("kea_dhcp") is not None:
         raise HTTPException(400, "Backup has no kea_dhcp section; restoring would leave existing Kea DHCP unchanged")
     discard_staging()
@@ -3146,6 +3149,10 @@ async def apply_staged_networkd() -> list[str]:
     names.update(interface for interface, _ in removed_bridge_members)
     pending_payload = _pending_json_payload()
     applied_payload = _read_applied_config_json() or {"version": 1, "files": {}, "routes": []}
+    if ("kea_dhcp" in pending_payload and
+            (applied_payload.get("kea_dhcp") or {}).get("ha_enabled") and
+            (applied_payload.get("kea_dhcp") or {}).get("ha_role") == "backup"):
+        raise HTTPException(403, "Cannot apply local Kea DHCP changes on an HA backup; discard the DHCP draft and synchronize from the primary")
     kea_dhcp = pending_payload.get("kea_dhcp", applied_payload.get("kea_dhcp"))
     if kea_dhcp is not None:
         kea_dhcp = _normalize_kea_dhcp_config(kea_dhcp)
@@ -3392,6 +3399,7 @@ async def get_dhcp_config():
         ],
         "ha_local_ip": _safe_kea_ha_local_ip(config),
         "sync_configured": bool(config.get("ha_enabled") and config.get("ha_role") == "backup"),
+        "read_only": bool((applied.get("kea_dhcp") or {}).get("ha_enabled") and (applied.get("kea_dhcp") or {}).get("ha_role") == "backup"),
         "sync_status": _kea_pull_status,
         "pending": "kea_dhcp" in pending and config != applied.get("kea_dhcp"),
     }
@@ -3399,6 +3407,9 @@ async def get_dhcp_config():
 
 @app.post("/api/dhcp")
 async def stage_dhcp_config(config: KeaDhcpConfig):
+    applied_kea = (_read_applied_config_json() or {}).get("kea_dhcp") or {}
+    if applied_kea.get("ha_enabled") and applied_kea.get("ha_role") == "backup":
+        raise HTTPException(403, "Kea DHCP configuration is read-only on an HA backup; changes must come from the primary router")
     normalized = _normalize_kea_dhcp_config(config.model_dump())
     interfaces = await get_interfaces()
     available = {item["name"] for item in interfaces}

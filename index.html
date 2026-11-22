@@ -1018,6 +1018,7 @@
                 <div><strong style="font-size:13px">Enable DHCP server</strong><div class="iface-meta" id="keaServiceInfo">Kea DHCPv4 service status</div></div>
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px"><input type="checkbox" id="keaEnabled"> Enabled</label>
               </div>
+              <div id="keaBackupReadOnly" class="form-help" style="display:none;margin-bottom:12px;font-weight:600">Read-only HA backup: DHCP settings are synchronized from the primary router. Edit DHCP networks, pools, and reservations on the primary.</div>
               <form id="keaDhcpForm" onsubmit="stageDhcpConfig(event)">
                 <div class="card" style="margin-bottom:16px;padding:14px">
                   <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="keaHaEnabled" onchange="toggleKeaHa()"> <strong>Enable High Availability (optional)</strong></label>
@@ -1059,7 +1060,7 @@
                   <div class="table-wrap"><table><thead><tr><th>MAC address</th><th>Reserved IPv4</th><th>Hostname (optional)</th><th></th></tr></thead><tbody id="keaReservationsBody"></tbody></table></div>
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap">
-                  <button type="submit" class="btn primary">Save DHCP Draft</button>
+                  <button type="submit" class="btn primary" id="keaSaveDraft">Save DHCP Draft</button>
                   <button type="button" class="btn" onclick="loadDhcp()">↻ Reload</button>
                   <span class="muted" id="keaDraftInfo" style="font-size:12px">Not yet saved</span>
                 </div>
@@ -1838,6 +1839,7 @@
   }
 
   let keaNetworks = [];
+  let keaReadOnly = false;
   let keaSelectedNetwork = 0;
   function readKeaNetwork() {
     return {
@@ -1881,12 +1883,14 @@
     showKeaNetwork();
   }
   function addKeaNetwork() {
+    if (keaReadOnly) return;
     saveKeaNetworkEditor();
     keaNetworks.push({interface: document.getElementById("keaInterface").options[0]?.value || "lan0", subnet:"", router:"", pool_start:"", pool_end:"", dns_servers:[], domain_name:null, valid_lifetime:86400, reservations:[]});
     keaSelectedNetwork = keaNetworks.length - 1;
     showKeaNetwork();
   }
   function removeKeaNetwork() {
+    if (keaReadOnly) return;
     if (keaNetworks.length <= 1) { showToast("Keep at least one network"); return; }
     keaNetworks.splice(keaSelectedNetwork, 1);
     keaSelectedNetwork = Math.min(keaSelectedNetwork, keaNetworks.length - 1);
@@ -1897,6 +1901,7 @@
     try {
       const data = await api("/api/dhcp");
       const config = data.config || {};
+      keaReadOnly = !!data.read_only;
       const selector = document.getElementById("keaInterface");
       const previous = config.interface || "lan0";
       selector.innerHTML = (data.interfaces || []).map(item => {
@@ -1919,6 +1924,12 @@
       }]).map(n => ({...n, reservations: [...(n.reservations || [])]}));
       keaSelectedNetwork = 0;
       showKeaNetwork();
+      const form = document.getElementById("keaDhcpForm");
+      form.querySelectorAll("input, button, select, textarea").forEach(el => {
+        if (el.id !== "keaNetworkSelect" && el.textContent.trim() !== "↻ Reload") el.disabled = keaReadOnly;
+      });
+      document.getElementById("keaEnabled").disabled = keaReadOnly;
+      document.getElementById("keaBackupReadOnly").style.display = keaReadOnly ? "block" : "none";
       const status = document.getElementById("keaStatus");
       status.textContent = !data.installed ? "Kea not installed" : (data.active ? "Running" : "Stopped");
       status.className = "badge " + (data.active ? "up" : "down");
@@ -1959,6 +1970,7 @@
 
   async function stageDhcpConfig(event) {
     event.preventDefault();
+    if (keaReadOnly) { showToast("DHCP configuration is read-only on the HA backup"); return; }
     saveKeaNetworkEditor();
     const payload = {
       enabled: document.getElementById("keaEnabled").checked,
