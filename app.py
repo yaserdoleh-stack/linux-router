@@ -23,6 +23,7 @@ from auth import COOKIE, read_auth, verify_password, issue_session, valid_sessio
 from collections import defaultdict, deque
 import floating_ip
 import kea_http_sync as dhcp_sync
+import wireless_manager
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Linux Router Manager API", version="1.0.0")
@@ -590,6 +591,15 @@ def _read_applied_config_json() -> dict | None:
             result["kea_dhcp"] = _normalize_kea_dhcp_config(payload["kea_dhcp"])
         if "firewall" in payload:
             result["firewall"] = _normalize_firewall(payload["firewall"])
+        # Keep wireless state in the applied snapshot. Without this, editing an
+        # interface always appears blank and Apply reconfigures unchanged radios.
+        if "wireless" in payload:
+            if not isinstance(payload["wireless"], dict):
+                raise ValueError("Invalid applied wireless configuration")
+            result["wireless"] = {
+                name: wireless_manager.validate(name, settings)
+                for name, settings in payload["wireless"].items()
+            }
         result["floating_ips"] = floating_ip.validate(payload.get("floating_ips", []))
         result["dhcp_lease_aliases"] = _normalize_lease_aliases(payload.get("dhcp_lease_aliases", {}))
         return result
@@ -661,6 +671,8 @@ def _write_applied_config_json(routes: list[dict], kea_dhcp: dict | None = None)
         payload["kea_dhcp"] = _normalize_kea_dhcp_config(kea_dhcp)
     prior = _read_applied_config_json()
     payload["systemd_networkd"] = _read_installed_networkd_snapshot()
+    if prior and "wireless" in prior:
+        payload["wireless"] = prior["wireless"]
     if prior and "firewall" in prior:
         payload["firewall"] = prior["firewall"]
     if prior:
@@ -1118,6 +1130,12 @@ def _staged_config_changes() -> list[dict[str, str]]:
                 "kind": "Kea DHCPv4",
                 "target": f"{desired_kea['interface']} · {'enabled' if desired_kea['enabled'] else 'disabled'} · {desired_kea['subnet'] or 'subnet not set'}",
             })
+    if "wireless" in draft:
+        applied_wireless = (_read_applied_config_json() or {}).get("wireless", {})
+        for name, cfg in draft["wireless"].items():
+            if cfg != applied_wireless.get(name):
+                changes.append({"action": "modified", "file": "config.json pending",
+                                "kind": "Wireless", "target": name + " (" + cfg["mode"] + ")"})
     if "firewall" in draft:
         applied = _read_applied_config_json() or {}
         if _normalize_firewall(draft["firewall"]) != applied.get("firewall", {"interfaces": [], "nat": [], "pat": []}):
@@ -2141,6 +2159,83 @@ async def favicon():
 async def health():
     return {"status": "ok", "hostname": socket.gethostname()}
 
+class WirelessModeUpdate(BaseModel):
+    mode: str
+    ssid: str
+    password: str
+    channel: int | str = "auto"
+    enabled: bool = True
+    band: str = "2.4"
+    bridge: str = ""
+    address_mode: str = "dhcp"
+    address: str = ""
+    gateway: str = ""
+    dns: str = ""
+
+
+@app.get("/api/wireless/{name}/settings")
+async def wireless_settings(name: str):
+    wireless_manager.validate(name, {"mode": "client", "ssid": "placeholder", "password": "placeholder"})
+    items = await get_interfaces()
+    if not any(i["name"] == name and i["category"] == "wireless" for i in items):
+        raise HTTPException(404, "Wireless interface not found")
+    root = _read_applied_config_json() or {}
+    applied = root.get("wireless", {}).get(name, {})
+    draft = _pending_json_payload()
+    staged = draft.get("wireless", {}).get(name) if "wireless" in draft else None
+    # The edit form intentionally starts from the last successfully applied
+    # settings, not from an unapplied draft. Show a warning when a draft exists.
+    cfg = applied
+    return {"enabled": cfg.get("enabled", False), "band": cfg.get("band", "2.4"),
+            "mode": cfg.get("mode", "client"), "ssid": cfg.get("ssid", ""),
+            "channel": cfg.get("channel", "auto"),
+            "bridge": cfg.get("bridge", ""), "address_mode": cfg.get("address_mode", "dhcp"),
+            "address": cfg.get("address", ""), "gateway": cfg.get("gateway", ""),
+            "dns": cfg.get("dns", ""),
+            "password_configured": bool(cfg.get("password")),
+            "applied": bool(applied), "pending_changes": staged is not None and staged != applied}
+
+
+
+@app.get("/api/wireless/{name}/current")
+async def wireless_current(name: str):
+    if not any(i["name"] == name and i["category"] == "wireless" for i in await get_interfaces()):
+        raise HTTPException(404, "Wireless interface not found")
+    return await asyncio.to_thread(wireless_manager.current_config, name)
+
+
+@app.put("/api/wireless/{name}/settings")
+async def stage_wireless_settings(name: str, settings: WirelessModeUpdate):
+    items = await get_interfaces()
+    if not any(i["name"] == name and i["category"] == "wireless" for i in items):
+        raise HTTPException(404, "Wireless interface not found")
+    root = _read_applied_config_json() or {}
+    draft = _pending_json_payload()
+    current = dict(draft.get("wireless", root.get("wireless", {})))
+    supplied = settings.model_dump()
+    if not supplied["password"]:
+        supplied["password"] = current.get(name, root.get("wireless", {}).get(name, {})).get("password", "")
+    if supplied.get("bridge"):
+        bridges = await get_bridges()
+        if supplied["bridge"] not in {b["name"] for b in bridges}:
+            raise HTTPException(400, "Selected bridge does not exist")
+    try:
+        current[name] = wireless_manager.validate(name, supplied)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    prepare_staging()
+    draft = _pending_json_payload()
+    _write_pending_config_json(draft.get("files", {}))
+    # Preserve all draft sections, including route, DHCP, and firewall changes.
+    root = json.loads(APPLIED_CONFIG_JSON.read_text())
+    root["pending"]["wireless"] = current
+    tmp = APPLIED_CONFIG_JSON.with_suffix(".json.wireless-tmp")
+    tmp.write_text(json.dumps(root, indent=2) + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(APPLIED_CONFIG_JSON)
+    return {"staged": True}
+
+
 @app.get("/api/interfaces")
 async def interfaces():
     try:
@@ -3059,8 +3154,20 @@ async def apply_staged_networkd() -> list[str]:
     if firewall_cfg is not None:
         await _apply_firewall(_normalize_firewall(firewall_cfg))
 
+    if "wireless" in pending_payload:
+        old_wireless = applied_payload.get("wireless", {})
+        for ifname, cfg in pending_payload["wireless"].items():
+            if cfg != old_wireless.get(ifname):
+                await asyncio.to_thread(wireless_manager.apply, ifname, cfg, old_wireless.get(ifname))
     # Commit applied state only after the requested services accepted the config.
     _write_applied_config_json(routes, kea_dhcp)
+    if "wireless" in pending_payload:
+        root = json.loads(APPLIED_CONFIG_JSON.read_text())
+        root["wireless"] = pending_payload["wireless"]
+        tmp = APPLIED_CONFIG_JSON.with_suffix(".json.wireless-commit")
+        tmp.write_text(json.dumps(root, indent=2) + "\n")
+        os.chmod(tmp, 0o600)
+        tmp.replace(APPLIED_CONFIG_JSON)
     if firewall_cfg is not None:
         root = json.loads(APPLIED_CONFIG_JSON.read_text())
         root["firewall"] = _normalize_firewall(firewall_cfg)

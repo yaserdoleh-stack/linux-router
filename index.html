@@ -1640,7 +1640,7 @@
           <td class="mono">${escapeHtml((i.addresses || []).join(", ") || "—")}</td>
           <td>${escapeHtml(i.speed || "—")}</td>
           <td>${escapeHtml(String(i.mtu ?? "—"))}</td>
-          <td><button class="btn" onclick="editInterface('${escapeHtml(i.name)}')">Edit</button></td>
+          <td><button class="btn" onclick="editWireless('${escapeHtml(i.name)}')">Edit</button></td>
         </tr>`).join("") : '<tr><td colspan="6" class="mono">No wireless interfaces detected.</td></tr>';
       document.getElementById("wirelessStatus").textContent = `${wireless.length} wireless interface${wireless.length === 1 ? "" : "s"}`;
     } catch (err) { showToast("Could not load wireless interfaces: " + err.message); }
@@ -2284,6 +2284,51 @@
     } catch (err) { showToast("Interface lookup failed: " + err.message); }
   }
 
+  async function editWireless(name) {
+    try {
+      const [data, current, bridges] = await Promise.all([api("/api/wireless/" + encodeURIComponent(name) + "/settings"), api("/api/wireless/" + encodeURIComponent(name) + "/current"), api("/api/bridges")]);
+      document.getElementById("configMode").value = "edit-wireless";
+      document.getElementById("configName").value = name;
+      document.getElementById("modalTitle").textContent = "Edit Wireless — " + name;
+      document.getElementById("configFields").innerHTML =
+        `<div class="form-group"><label>Current installed configuration (read-only)</label><div class="mono" style="padding:12px;border:1px solid var(--border,#555);border-radius:6px;line-height:1.8;white-space:pre-wrap">${escapeHtml(current.configured ? `Service: ${current.service_status} | ${current.enabled ? 'Enabled' : 'Disabled'}\nConfigured mode: ${current.mode || 'Unknown'} | Actual interface mode: ${current.interface_mode}\nSSID: ${current.ssid || '(none)'}\nBand: ${current.band || 'Unknown'} | Configured channel: ${current.channel ?? 'Unknown'}\nOperating channel: ${current.operating_channel ?? 'Not associated'} | Frequency: ${current.frequency_mhz ? current.frequency_mhz + ' MHz' : 'Unavailable'}\nPassword: ${current.password_configured ? 'Configured (hidden)' : 'Not configured'}` : `No installed wireless configuration. Service: ${current.service_status}; interface mode: ${current.interface_mode}`)}</div><small>Read from the installed wireless configuration and Linux interface status. Values below are the last applied Router Manager settings and may differ from the running configuration.</small></div>` +
+        `<div class="form-group"><label>Interface state</label><select class="input" id="cfg_wifi_enabled" onchange="toggleWirelessMode()"><option value="true" ${data.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${data.enabled === false ? "selected" : ""}>Disabled</option></select></div>` +
+        `<div class="form-group"><label>Wireless mode</label><select class="input" id="cfg_wifi_mode" onchange="toggleWirelessMode()"><option value="client" ${data.mode === 'client' ? 'selected' : ''}>Client (connect to Wi-Fi)</option><option value="access_point" ${data.mode === 'access_point' ? 'selected' : ''}>Access Point (provide Wi-Fi)</option></select></div>` +
+        `<div class="form-group"><small>${data.pending_changes ? 'Unapplied wireless changes exist. This form shows the last applied settings; saving will replace the pending settings for this interface.' : data.applied ? 'Showing last successfully applied wireless settings.' : 'No previously applied wireless configuration is saved.'}</small></div>` +
+        field("SSID", "wifi_ssid", data.ssid || "") +
+        `<div class="form-group"><label>WPA2 password</label><input class="input" type="password" id="cfg_wifi_password" autocomplete="new-password" placeholder="${data.password_configured ? 'Leave blank to keep current password' : '8–63 ASCII characters'}"><small>WPA2-Personal; password is not returned by the API.</small></div>` +
+        `<div class="form-group" id="wifi_client_network"><label>Add to bridge</label><select class="input" id="cfg_wifi_bridge" onchange="toggleWirelessMode()"><option value="">No bridge (configure IP on wireless interface)</option>${bridges.map(b => `<option value="${escapeHtml(b.name)}" ${data.bridge === b.name ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}</select><small>When bridged, DHCP/static IP belongs on the bridge, not the wireless interface. Client bridging also requires upstream Wi-Fi 4-address/WDS support.</small></div>` +
+        `<div class="form-group" id="wifi_client_address"><label>IPv4 configuration</label><select class="input" id="cfg_wifi_address_mode" onchange="toggleWirelessMode()"><option value="dhcp" ${data.address_mode === 'dhcp' ? 'selected' : ''}>DHCP</option><option value="static" ${data.address_mode === 'static' ? 'selected' : ''}>Static IP</option><option value="none" ${data.address_mode === 'none' ? 'selected' : ''}>No IPv4 address</option></select></div>` +
+        `<div id="wifi_client_static">${field("Static IPv4 (CIDR)", "wifi_address", data.address || "")}${field("Default gateway (optional)", "wifi_gateway", data.gateway || "")}${field("DNS servers (space-separated, optional)", "wifi_dns", data.dns || "")}</div>` +
+        `<div class="form-group" id="wifi_band_group"><label>Frequency band</label><select class="input" id="cfg_wifi_band" onchange="updateWirelessChannels()"><option value="2.4" ${data.band === '2.4' || !data.band ? 'selected' : ''}>2.4 GHz</option><option value="5" ${data.band === '5' ? 'selected' : ''}>5 GHz</option><option value="6" ${data.band === '6' ? 'selected' : ''}>6 GHz</option></select></div>` +
+        `<div class="form-group" id="wifi_channel_group"><label>AP channel</label><select class="input" id="cfg_wifi_channel"></select><small id="wifi_band_note"></small></div>`;
+      updateWirelessChannels(data.channel);
+      toggleWirelessMode();
+      document.getElementById("configModal").classList.add("show");
+    } catch(err) { showToast("Wireless lookup failed: " + err.message); }
+  }
+  function updateWirelessChannels(preferred) {
+    const channels = {"2.4":[1,2,3,4,5,6,7,8,9,10,11],"5":[36,40,44,48,149,153,157,161,165],"6":[5,21,37,53,69,85,101,117,133,149,165,181,197,213,229]};
+    const band = cfg("wifi_band"), select = document.getElementById("cfg_wifi_channel");
+    if (!select) return;
+    const selected = preferred ?? select.value;
+    select.innerHTML = `<option value="auto" ${selected === 'auto' || selected === 0 || selected === '0' ? 'selected' : ''}>Auto (ACS)</option>` + channels[band].map(c => `<option value="${c}" ${String(c) === String(selected) ? 'selected' : ''}>${c}</option>`).join('');
+    document.getElementById("wifi_band_note").textContent = band === "6" ? "6 GHz client support depends on adapter; AP requires WPA3-SAE and is not yet supported." : "Available channels depend on adapter capabilities and regulatory domain.";
+  }
+  function toggleWirelessMode() {
+    const channel = document.getElementById("wifi_channel_group");
+    const band = document.getElementById("wifi_band_group");
+    if(band) band.style.display = cfg("wifi_mode") === "access_point" && cfg("wifi_enabled") === "true" ? "" : "none";
+    if(channel) channel.style.display = cfg("wifi_mode") === "access_point" && cfg("wifi_enabled") === "true" ? "" : "none";
+    const client = cfg("wifi_mode") === "client";
+    const net = document.getElementById("wifi_client_network");
+    const addr = document.getElementById("wifi_client_address");
+    const stat = document.getElementById("wifi_client_static");
+    if(net) net.style.display = client ? "" : "none";
+    if(addr) addr.style.display = client && !cfg("wifi_bridge") ? "" : "none";
+    if(stat) stat.style.display = client && !cfg("wifi_bridge") && cfg("wifi_address_mode") === "static" ? "" : "none";
+  }
+
   async function editBridge(name) {
     const data = (await api("/api/bridges")).find(x => x.name === name);
     if (!data) return showToast("Bridge not found");
@@ -2341,6 +2386,7 @@
       let result;
       if (mode === "add-bridge") result = await api("/api/bridges", {method:"POST", body:JSON.stringify({name:cfg("name"), stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});
       else if (mode === "add-vlan") result = await api("/api/vlans", {method:"POST", body:JSON.stringify({name:cfg("name"), parent:cfg("parent"), vlan_id:num("vlan_id"), mtu:num("mtu"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
+      else if (mode === "edit-wireless") result = await api("/api/wireless/"+encodeURIComponent(name)+"/settings", {method:"PUT", body:JSON.stringify({mode:cfg("wifi_mode"),ssid:cfg("wifi_ssid"),password:cfg("wifi_password"),channel:cfg("wifi_mode")==="client"?"auto":cfg("wifi_channel"),band:cfg("wifi_mode")==="client"?"auto":cfg("wifi_band"),enabled:cfg("wifi_enabled")==="true",bridge:cfg("wifi_mode")==="client"?cfg("wifi_bridge"):"",address_mode:cfg("wifi_mode")==="client"?cfg("wifi_address_mode"):"none",address:cfg("wifi_address"),gateway:cfg("wifi_gateway"),dns:cfg("wifi_dns")})});
       else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean), mtu:num("mtu"), state:cfg("state")||null})});
       else if (mode === "edit-bridge") result = await api("/api/bridges/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
       else if (mode === "edit-vlan") result = await api("/api/vlans/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({mtu:num("mtu"), state:cfg("state")||null, address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});

@@ -4,7 +4,7 @@ if (( EUID != 0 )); then echo "Run with sudo" >&2; exit 1; fi
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 TARGET=/usr/local/lib/router-manager
 OLD=/home/ydoleh/chatgpt-router
-for file in kea_http_sync.py floating_ip.py router-manager-vrrp.service app.py auth.py setup-admin.py login.html index.html router-manager.service; do
+for file in kea_http_sync.py floating_ip.py router-manager-vrrp.service app.py wireless_manager.py auth.py setup-admin.py login.html index.html router-manager.service; do
   [[ -f "$HERE/$file" ]] || { echo "Missing $HERE/$file" >&2; exit 1; }
 done
 # Require an administrator password before deploying or restarting the web service.
@@ -15,6 +15,7 @@ if systemctl is-active --quiet router-manager.service; then systemctl stop route
 install -d -m 0755 "$TARGET"
 if [[ -f "$TARGET/app.py" ]]; then cp -a "$TARGET/app.py" "$TARGET/app.py.bak.$(date +%Y%m%d%H%M%S)"; fi
 install -m 0644 "$HERE/app.py" "$TARGET/app.py"
+install -m 0644 "$HERE/wireless_manager.py" "$TARGET/wireless_manager.py"
 install -m 0644 "$HERE/floating_ip.py" "$TARGET/floating_ip.py"
 install -m 0644 "$HERE/kea_http_sync.py" "$TARGET/kea_http_sync.py"
 install -m 0644 "$HERE/router-manager-vrrp.service" /etc/systemd/system/router-manager-vrrp.service
