@@ -6,7 +6,7 @@ import os
 import re
 import urllib.request
 
-SHARED_FIELDS = ('enabled', 'subnet', 'pool_start', 'pool_end', 'router', 'dns_servers', 'domain_name', 'valid_lifetime', 'reservations')
+SHARED_FIELDS = ('networks', 'enabled', 'subnet', 'pool_start', 'pool_end', 'router', 'dns_servers', 'domain_name', 'valid_lifetime', 'reservations')
 TOKEN_FILE = '/etc/router-manager/kea-sync.token'
 
 def read_token():
@@ -29,7 +29,7 @@ def validate_host(host):
     return host
 
 def shared_only(config):
-    return {key: config[key] for key in SHARED_FIELDS}
+    return {key: config[key] for key in SHARED_FIELDS if key in config}
 
 def merge(primary, backup):
     result = dict(backup)

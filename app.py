@@ -4,6 +4,7 @@ import asyncio
 import logging
 import subprocess
 import ipaddress
+import zlib
 import os
 import tempfile
 import platform
@@ -171,14 +172,16 @@ class KeaReservation(BaseModel):
 class KeaDhcpConfig(BaseModel):
     enabled: bool = True
     interface: str = "lan0"
-    subnet: str
-    pool_start: str
-    pool_end: str
-    router: str
+    subnet: str = ""
+    pool_start: str = ""
+    pool_end: str = ""
+    router: str = ""
     dns_servers: list[str] = Field(default_factory=list)
     domain_name: str | None = None
     valid_lifetime: int = 86400
     reservations: list[KeaReservation] = Field(default_factory=list)
+    networks: list[dict] | None = None
+    interfaces: list[str] | None = None
     ha_enabled: bool = False
     ha_role: str = "primary"
     ha_peer_ip: str = ""
@@ -1128,7 +1131,7 @@ def _staged_config_changes() -> list[dict[str, str]]:
                 "action": action,
                 "file": "config.json pending",
                 "kind": "Kea DHCPv4",
-                "target": f"{desired_kea['interface']} · {'enabled' if desired_kea['enabled'] else 'disabled'} · {desired_kea['subnet'] or 'subnet not set'}",
+                "target": f"{len(desired_kea.get('networks') or [desired_kea])} DHCP network(s) · {'enabled' if desired_kea['enabled'] else 'disabled'}",
             })
     if "wireless" in draft:
         applied_wireless = (_read_applied_config_json() or {}).get("wireless", {})
@@ -1520,6 +1523,37 @@ def _default_kea_dhcp_config(interfaces: list[dict] | None = None) -> dict:
 
 
 def _normalize_kea_dhcp_config(raw: dict) -> dict:
+    # Convert older single-subnet configurations without losing their settings.
+    if raw.get("networks") is not None:
+        if not isinstance(raw["networks"], list) or (raw.get("enabled", True) and not raw["networks"]):
+            raise HTTPException(400, "At least one DHCP network is required when enabled")
+        networks = []
+        seen = []
+        for index, entry in enumerate(raw["networks"]):
+            if not isinstance(entry, dict):
+                raise HTTPException(400, "Each DHCP network must be an object")
+            legacy = {**entry, "enabled": raw.get("enabled", True), "ha_enabled": False}
+            legacy.pop("networks", None)
+            legacy.pop("interfaces", None)
+            normalized = _normalize_kea_dhcp_config(legacy)
+            if normalized["subnet"]:
+                network = ipaddress.ip_network(normalized["subnet"])
+                if any(network.overlaps(previous) for previous in seen):
+                    raise HTTPException(400, f"DHCP network {network} overlaps an existing network")
+                seen.append(network)
+            networks.append({key: normalized[key] for key in ("interface", "subnet", "pool_start", "pool_end", "router", "dns_servers", "domain_name", "valid_lifetime", "reservations")})
+        interfaces = list(dict.fromkeys(validate_ifname(name) for name in (raw.get("interfaces") or [n["interface"] for n in networks])))
+        if any(n["interface"] not in interfaces for n in networks):
+            raise HTTPException(400, "Every network interface must be in the DHCP listening interfaces")
+        if not interfaces:
+            raise HTTPException(400, "Select at least one DHCP listening interface")
+        # HA and sync settings are validated using the original normalization path.
+        first = networks[0] if networks else {"interface": interfaces[0], "subnet": "", "pool_start": "", "pool_end": "", "router": ""}
+        base = _normalize_kea_dhcp_config({**first, "enabled": raw.get("enabled", True),
+            **{key: raw[key] for key in ("ha_enabled", "ha_role", "ha_peer_ip", "sync_interval") if key in raw}})
+        base["interfaces"] = interfaces
+        base["networks"] = networks
+        return base
     try:
         config = KeaDhcpConfig(**raw).model_dump()
         interface = validate_ifname(config["interface"])
@@ -1720,6 +1754,24 @@ def _kea_dhcp4_document(config: dict) -> dict:
         }
     }
 
+    if config.get("networks") is not None:
+        document["Dhcp4"]["interfaces-config"]["interfaces"] = config["interfaces"]
+        document["Dhcp4"]["subnet4"] = []
+        for idx, network in enumerate(config["networks"], 1):
+            options = [{"name": "routers", "data": network["router"]}]
+            if network.get("dns_servers"):
+                options.append({"name": "domain-name-servers", "data": ", ".join(network["dns_servers"])})
+            if network.get("domain_name"):
+                options.append({"name": "domain-name", "data": network["domain_name"]})
+            document["Dhcp4"]["subnet4"].append({
+                "id": (zlib.crc32(network["subnet"].encode("ascii")) & 0x7fffffff) or 1, "subnet": network["subnet"], "interface": network["interface"],
+                "pools": [{"pool": f"{network['pool_start']} - {network['pool_end']}"}],
+                "valid-lifetime": int(network["valid_lifetime"]),
+                "reservations": [{"ip-address": r["ip_address"], "hw-address": r["hw_address"],
+                    **({"hostname": r["hostname"]} if r.get("hostname") else {})}
+                    for r in network.get("reservations", [])],
+                "option-data": options,
+            })
     if config.get("ha_enabled"):
         local = _kea_ha_local_ip(config)
         peer = config["ha_peer_ip"]
@@ -3349,9 +3401,10 @@ async def get_dhcp_config():
 async def stage_dhcp_config(config: KeaDhcpConfig):
     normalized = _normalize_kea_dhcp_config(config.model_dump())
     interfaces = await get_interfaces()
-    selected_interface = next((item for item in interfaces if item["name"] == normalized["interface"]), None)
-    if selected_interface is None:
-        raise HTTPException(400, f"Interface {normalized['interface']} does not exist")
+    available = {item["name"] for item in interfaces}
+    for name in normalized.get("interfaces", [normalized["interface"]]):
+        if name not in available:
+            raise HTTPException(400, f"Interface {name} does not exist")
     if normalized.get("ha_enabled"):
         try:
             _kea_dhcp4_document(normalized)  # Check IP selection and installed HA hooks.

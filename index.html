@@ -1030,8 +1030,14 @@
                   </div>
                   <div class="form-help" style="margin-top:12px">HA backup routers automatically pull shared DHCP settings from the primary peer at the selected frequency. The primary address is taken from <strong>Peer router permanent IPv4</strong>. Requires a shared HTTP sync token on both routers.</div>
                 </div>
+                <div style="margin-bottom:12px;display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+                  <div class="form-group" style="flex:1"><label for="keaNetworkSelect">DHCP networks</label><select class="input" id="keaNetworkSelect" onchange="switchKeaNetwork()"></select></div>
+                  <button type="button" class="btn" onclick="addKeaNetwork()">+ Add network</button>
+                  <button type="button" class="btn" onclick="removeKeaNetwork()">Remove network</button>
+                </div>
+                <div class="form-help" style="margin-bottom:12px">Each network has its own interface, subnet, pool, gateway, DNS, lease time and reservations. The server listens on all selected network interfaces.</div>
                 <div class="form-grid">
-                  <div class="form-group full"><label for="keaInterface">Listen interface</label><select class="input" id="keaInterface" required></select><div class="form-help">Select the LAN-facing interface that should receive DHCP requests.</div></div>
+                  <div class="form-group full"><label for="keaInterface">Network interface</label><select class="input" id="keaInterface" required></select><div class="form-help">Select the LAN-facing interface that should receive DHCP requests.</div></div>
                   <div class="form-group"><label for="keaSubnet">IPv4 subnet / CIDR</label><input class="input" id="keaSubnet" placeholder="192.168.1.0/24"></div>
                   <div class="form-group"><label for="keaRouter">Default gateway</label><input class="input" id="keaRouter" placeholder="192.168.1.1"></div>
                   <div class="form-group"><label for="keaPoolStart">Pool start</label><input class="input" id="keaPoolStart" placeholder="192.168.1.100"></div>
@@ -1831,6 +1837,62 @@
     document.getElementById("keaSyncIntervalGroup").style.display = document.getElementById("keaHaEnabled").checked && document.getElementById("keaHaRole").value === "backup" ? "block" : "none";
   }
 
+  let keaNetworks = [];
+  let keaSelectedNetwork = 0;
+  function readKeaNetwork() {
+    return {
+      interface: document.getElementById("keaInterface").value,
+      subnet: document.getElementById("keaSubnet").value.trim(),
+      router: document.getElementById("keaRouter").value.trim(),
+      pool_start: document.getElementById("keaPoolStart").value.trim(),
+      pool_end: document.getElementById("keaPoolEnd").value.trim(),
+      dns_servers: ["keaDns1", "keaDns2", "keaDns3"].map(id => document.getElementById(id).value.trim()).filter(Boolean),
+      domain_name: document.getElementById("keaDomain").value.trim() || null,
+      valid_lifetime: Number(document.getElementById("keaLease").value || 86400),
+      reservations: collectDhcpReservations()
+    };
+  }
+  function saveKeaNetworkEditor() {
+    if (keaNetworks.length) keaNetworks[keaSelectedNetwork] = readKeaNetwork();
+  }
+  function refreshKeaNetworkSelector() {
+    const select = document.getElementById("keaNetworkSelect");
+    select.innerHTML = keaNetworks.map((n,i) => `<option value="${i}">${escapeHtml(n.subnet || `Network ${i+1}`)} — ${escapeHtml(n.interface || "")}</option>`).join("");
+    select.value = String(keaSelectedNetwork);
+  }
+  function showKeaNetwork() {
+    const n = keaNetworks[keaSelectedNetwork] || {};
+    document.getElementById("keaInterface").value = n.interface || "";
+    document.getElementById("keaSubnet").value = n.subnet || "";
+    document.getElementById("keaRouter").value = n.router || "";
+    document.getElementById("keaPoolStart").value = n.pool_start || "";
+    document.getElementById("keaPoolEnd").value = n.pool_end || "";
+    ["keaDns1", "keaDns2", "keaDns3"].forEach((id,i) => document.getElementById(id).value = (n.dns_servers || [])[i] || "");
+    document.getElementById("keaDomain").value = n.domain_name || "";
+    document.getElementById("keaLease").value = n.valid_lifetime || 86400;
+    document.getElementById("keaReservationsBody").innerHTML = "";
+    (n.reservations || []).forEach(addDhcpReservation);
+    refreshKeaNetworkSelector();
+  }
+  function switchKeaNetwork() {
+    const next = Number(document.getElementById("keaNetworkSelect").value);
+    saveKeaNetworkEditor();
+    keaSelectedNetwork = next;
+    showKeaNetwork();
+  }
+  function addKeaNetwork() {
+    saveKeaNetworkEditor();
+    keaNetworks.push({interface: document.getElementById("keaInterface").options[0]?.value || "lan0", subnet:"", router:"", pool_start:"", pool_end:"", dns_servers:[], domain_name:null, valid_lifetime:86400, reservations:[]});
+    keaSelectedNetwork = keaNetworks.length - 1;
+    showKeaNetwork();
+  }
+  function removeKeaNetwork() {
+    if (keaNetworks.length <= 1) { showToast("Keep at least one network"); return; }
+    keaNetworks.splice(keaSelectedNetwork, 1);
+    keaSelectedNetwork = Math.min(keaSelectedNetwork, keaNetworks.length - 1);
+    showKeaNetwork();
+  }
+
   async function loadDhcp() {
     try {
       const data = await api("/api/dhcp");
@@ -1849,17 +1911,14 @@
       document.getElementById("keaSyncInterval").value = String([30,60,300].includes(Number(config.sync_interval)) ? config.sync_interval : 60);
       document.getElementById("keaHaLocal").textContent = data.ha_local_ip || "Detected when HA is enabled and configuration is staged";
       toggleKeaHa();
-      document.getElementById("keaSubnet").value = config.subnet || "";
-      document.getElementById("keaRouter").value = config.router || "";
-      document.getElementById("keaPoolStart").value = config.pool_start || "";
-      document.getElementById("keaPoolEnd").value = config.pool_end || "";
-      ["keaDns1", "keaDns2", "keaDns3"].forEach((id, i) => {
-        document.getElementById(id).value = (config.dns_servers || [])[i] || "";
-      });
-      document.getElementById("keaDomain").value = config.domain_name || "";
-      document.getElementById("keaLease").value = config.valid_lifetime || 86400;
-      document.getElementById("keaReservationsBody").innerHTML = "";
-      (config.reservations || []).forEach(addDhcpReservation);
+      keaNetworks = (config.networks && config.networks.length ? config.networks : [{
+        interface: config.interface || "lan0", subnet: config.subnet || "", router: config.router || "",
+        pool_start: config.pool_start || "", pool_end: config.pool_end || "",
+        dns_servers: config.dns_servers || [], domain_name: config.domain_name || null,
+        valid_lifetime: config.valid_lifetime || 86400, reservations: config.reservations || []
+      }]).map(n => ({...n, reservations: [...(n.reservations || [])]}));
+      keaSelectedNetwork = 0;
+      showKeaNetwork();
       const status = document.getElementById("keaStatus");
       status.textContent = !data.installed ? "Kea not installed" : (data.active ? "Running" : "Stopped");
       status.className = "badge " + (data.active ? "up" : "down");
@@ -1900,21 +1959,17 @@
 
   async function stageDhcpConfig(event) {
     event.preventDefault();
+    saveKeaNetworkEditor();
     const payload = {
       enabled: document.getElementById("keaEnabled").checked,
       ha_enabled: document.getElementById("keaHaEnabled").checked,
       ha_role: document.getElementById("keaHaRole").value,
       ha_peer_ip: document.getElementById("keaHaPeer").value.trim(),
       sync_interval: Number(document.getElementById("keaSyncInterval").value),
-      interface: document.getElementById("keaInterface").value,
-      subnet: document.getElementById("keaSubnet").value.trim(),
-      router: document.getElementById("keaRouter").value.trim(),
-      pool_start: document.getElementById("keaPoolStart").value.trim(),
-      pool_end: document.getElementById("keaPoolEnd").value.trim(),
-      dns_servers: ["keaDns1", "keaDns2", "keaDns3"].map(id => document.getElementById(id).value.trim()).filter(Boolean),
-      domain_name: document.getElementById("keaDomain").value.trim() || null,
-      valid_lifetime: Number(document.getElementById("keaLease").value || 86400),
-      reservations: collectDhcpReservations()
+      interfaces: [...new Set(keaNetworks.map(n => n.interface))],
+      networks: keaNetworks,
+      ...keaNetworks[0]
+
     };
     try {
       await api("/api/dhcp", {method:"POST", body:JSON.stringify(payload)});
