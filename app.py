@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Linux Router Manager API", version="1.0.0")
 
+
 # Same-origin only: router administration must not be callable from other websites.
 LOGIN_ATTEMPTS = defaultdict(deque)
 

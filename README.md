@@ -4,17 +4,6 @@ A web-based management interface for a Linux router, built with **FastAPI** and 
 
 > **Project status:** Experimental. Test changes from a local console before using on a production router. This application can modify networking and firewall settings and may interrupt remote access.
 
-## Features
-
-- **Monitoring:** View network interface and system status.
-- **Interfaces, bridges, and VLANs:** Inspect existing Linux devices and stage supported network configuration changes. Firewall enablement checkboxes are available on these pages.
-- **Routing:** View routes and manage supported static routes using systemd-networkd.
-- **DHCPv4:** Configure Kea DHCP server settings, address pool, gateway, lease lifetime, domain, up to three DNS servers, and MAC-based IP address reservations; inspect leases.
-- **Firewall:** Inspect nftables chains and rules; configure source NAT (by IPv4 CIDR or incoming interface) and TCP/UDP port forwarding.
-- **Configuration management:** Save pending changes, apply or undo them, and download/restore `config.json` backups.
-- **System controls:** Reboot and shut down the router from the web interface.
-- **Administrator login:** Password-protected UI and API, signed session cookies, and a sign-out action.
-
 ## Screenshots
 
 Screenshots of the Router Manager web interface. Public WAN addresses shown in these images have been replaced with [documentation-only example addresses](https://www.rfc-editor.org/rfc/rfc5737) (`203.0.113.0/24` and `198.51.100.0/24`).
@@ -46,6 +35,17 @@ Screenshots of the Router Manager web interface. Public WAN addresses shown in t
 ![DHCP server and high availability settings](screenshots/dhcp-settings.png)
 
 ![DHCP reservations](screenshots/dhcp-reservations.png)
+
+## Features
+
+- **Monitoring:** View network interface and system status.
+- **Interfaces, bridges, and VLANs:** Inspect existing Linux devices and stage supported network configuration changes. Firewall enablement checkboxes are available on these pages.
+- **Routing:** View routes and manage supported static routes using systemd-networkd.
+- **DHCPv4:** Configure Kea DHCP server settings, address pool, gateway, lease lifetime, domain, up to three DNS servers, and MAC-based IP address reservations; inspect leases.
+- **Firewall:** Inspect nftables chains and rules; configure source NAT (by IPv4 CIDR or incoming interface) and TCP/UDP port forwarding.
+- **Configuration management:** Save pending changes, apply or undo them, and download/restore `config.json` backups.
+- **System controls:** Reboot and shut down the router from the web interface.
+- **Administrator login:** Password-protected UI and API, signed session cookies, and a sign-out action.
 
 ## Requirements
 
@@ -142,12 +142,12 @@ Configuration restore is staged first; it is not applied until **Apply Changes**
 
 ## Security
 
-**Do not expose this application to the public internet.** Login authentication is now required for the UI and API, but the service still runs as root and uses **unencrypted HTTP on port 80**. Passwords and session cookies are not protected against interception on the network. Use HTTPS through a reverse proxy or a VPN, and restrict access to a trusted management network.
+**Do not expose this application to the public internet.** Login authentication is now required for the UI and API, but the service still runs as root and uses **unencrypted HTTP on port 80**. Passwords and session cookies are not protected against interception on the network. Use HTTPS through an authenticated reverse proxy, and restrict access to a trusted management network.
 
 Recommended precautions:
 
 - Restrict access to a trusted management network using an independent firewall policy.
-- Use a VPN or an authenticated HTTPS reverse proxy before allowing access from other networks.
+- Use an authenticated HTTPS reverse proxy before allowing access from other networks.
 - Do not expose the service on the WAN interface.
 - Back up `/etc/systemd/network/`, `/etc/nftables.conf`, `/etc/kea/`, and `/var/lib/router-manager/config.json` before making major changes.
 - Keep an out-of-band or local console available when applying network and firewall changes.
@@ -229,7 +229,7 @@ is allowed only when conntrack state is `established` or `related`. Traffic
 entering on other interfaces is explicitly accepted by these managed chains.
 Disabling all interface checkboxes restores `policy accept` in these chains.
 
-**WARNING:** New connections to the router (including its web UI and SSH),
+**WARNING:** New connections to the router (including its web UI),
 new forwarded traffic, and DHCP requests arriving on a protected interface
 will be blocked. NAT and port-forward entries do **not** override this rule.
 Do not protect a management or LAN interface until explicit allow rules are

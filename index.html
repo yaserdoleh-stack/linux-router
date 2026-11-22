@@ -726,12 +726,6 @@
 .interface-group .group-count { min-width:28px; text-align:center; }
 
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}.modal-backdrop.show{display:flex}.modal{width:min(620px,100%);max-height:90vh;overflow:auto;background:var(--panel,#111827);border:1px solid var(--border,#273244);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.modal-header h2{margin:0 0 4px}.modal-header span{color:var(--muted,#94a3b8);font-size:12px}.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.danger{border-color:#7f1d1d!important}.form-help{font-size:12px;color:var(--muted,#94a3b8);margin-top:-6px;margin-bottom:8px}
-
-  .nav-parent .nav-chevron { margin-left:auto; font-size:12px; opacity:.75; }
-  .nav-submenu { display:block; }
-  .nav-submenu.collapsed { display:none; }
-  .nav-child { padding-left:32px; font-size:13px; }
-  .nav-parent.child-active { color:var(--text,#e5e7eb); }
 </style>
 </head>
 
@@ -753,22 +747,17 @@
         <span class="nav-icon">⌂</span><span class="nav-label">Dashboard</span>
       </button>
       <div class="nav-section">Network</div>
-      <button class="nav-item nav-parent" id="interfacesNavToggle" type="button" aria-expanded="true" aria-controls="interfacesSubmenu">
-        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span><span class="nav-chevron" aria-hidden="true">▾</span>
+      <button class="nav-item" data-page="interfaces">
+        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span>
       </button>
-      <div class="nav-submenu" id="interfacesSubmenu">
-        <button class="nav-item nav-child" data-page="interfaces" type="button">
-          <span class="nav-icon">↳</span><span class="nav-label">Physical</span>
-        </button>
-        <button class="nav-item nav-child" data-page="bridges" type="button">
-          <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
-        </button>
-        <button class="nav-item nav-child" data-page="vlans" type="button">
-          <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
-        </button>
-      </div>
       <button class="nav-item" data-page="wireless">
         <span class="nav-icon">◉</span><span class="nav-label">Wireless</span>
+      </button>
+      <button class="nav-item" data-page="bridges">
+        <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
+      </button>
+      <button class="nav-item" data-page="vlans">
+        <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
       </button>
       <button class="nav-item" data-page="floating">
         <span class="nav-icon">◎</span><span class="nav-label">Floating IPs</span>
@@ -781,9 +770,6 @@
       </button>
       <button class="nav-item" data-page="dhcp">
         <span class="nav-icon">▣</span><span class="nav-label">DHCP</span>
-      </button>
-      <button class="nav-item" data-page="vpn">
-        <span class="nav-icon">⌁</span><span class="nav-label">VPN</span>
       </button>
 
       <div class="nav-section">System</div>
@@ -1129,28 +1115,6 @@
         </div>
       </div>
 
-      <!-- VPN -->
-      <div class="page" id="page-vpn">
-        <div class="toolbar">
-          <div class="toolbar-left"><button class="btn primary" onclick="showToast('WireGuard peer editor would open here')">+ Add Peer</button></div>
-          <div class="toolbar-right"><span class="badge warn">WireGuard configured</span></div>
-        </div>
-        <div class="card">
-          <div class="card-header"><h2>WireGuard</h2><span>wg0</span></div>
-          <div class="card-body">
-            <div class="form-grid">
-              <div class="form-group"><label>Interface address</label><input class="input" value="10.10.0.1/24"></div>
-              <div class="form-group"><label>Listen port</label><input class="input" value="51820"></div>
-              <div class="form-group full"><label>Public key</label><input class="input mono" value="J7f6mWk9Qx2vK2v4r9mP0xExampleKeyOnly"></div>
-            </div>
-            <div class="switch-row" style="margin-top:14px">
-              <div><strong style="font-size:13px">WireGuard enabled</strong><div class="iface-meta">wg0 interface</div></div>
-              <button class="switch on" onclick="toggleSwitch(this)"></button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- LOGS -->
       <div class="page" id="page-logs">
         <div class="toolbar">
@@ -1201,7 +1165,6 @@
               <div class="switch-row"><div><strong style="font-size:13px">systemd-networkd</strong></div><span class="badge up">RUNNING</span></div>
               <div class="switch-row"><div><strong style="font-size:13px">nftables</strong></div><span class="badge up">RUNNING</span></div>
               <div class="switch-row"><div><strong style="font-size:13px">dnsmasq</strong></div><span class="badge up">RUNNING</span></div>
-              <div class="switch-row"><div><strong style="font-size:13px">ssh</strong></div><span class="badge up">RUNNING</span></div>
             </div>
           </div>
         </div>
@@ -1498,7 +1461,7 @@
   async function toggleInterfaceFirewall(checkbox) {
     const iface = checkbox.dataset.iface;
     const previous = checkbox.checked;
-    if (previous && !window.confirm(`Enable strict firewall on ${iface}? New incoming connections to the router (including web/SSH management) and new forwarded connections arriving on this interface will be blocked. Only established/related traffic is allowed. You may lose remote access.`)) {
+    if (previous && !window.confirm(`Enable strict firewall on ${iface}? New incoming connections to the router (including web management) and new forwarded connections arriving on this interface will be blocked. Only established/related traffic is allowed. You may lose remote access.`)) {
       checkbox.checked = false;
       return;
     }
@@ -2025,20 +1988,11 @@
     dhcp: ["DHCP", "DHCP server configuration and active leases"],
     vlans: ["VLANs", "802.1Q VLAN configuration"],
     floating: ["Floating IPs", "VRRP cluster virtual IP addresses"],
-    vpn: ["VPN", "WireGuard tunnels and peers"],
     logs: ["Logs", "System and network service logs"],
     system: ["System", "Router operating system and services"]
   };
 
-  const interfacesNavToggle = document.getElementById("interfacesNavToggle");
-  const interfacesSubmenu = document.getElementById("interfacesSubmenu");
-  interfacesNavToggle.addEventListener("click", () => {
-    const collapsed = interfacesSubmenu.classList.toggle("collapsed");
-    interfacesNavToggle.setAttribute("aria-expanded", String(!collapsed));
-    interfacesNavToggle.querySelector(".nav-chevron").textContent = collapsed ? "▸" : "▾";
-  });
-
-  document.querySelectorAll(".nav-item[data-page]").forEach(item => {
+  document.querySelectorAll(".nav-item").forEach(item => {
     item.addEventListener("click", () => {
       navigate(item.dataset.page);
     });
@@ -2049,13 +2003,6 @@
       x.classList.toggle("active", x.dataset.page === page);
     });
 
-    interfacesNavToggle.classList.toggle("child-active", ["interfaces", "bridges", "vlans"].includes(page));
-    if (["interfaces", "bridges", "vlans"].includes(page)) {
-      interfacesSubmenu.classList.remove("collapsed");
-      interfacesNavToggle.setAttribute("aria-expanded", "true");
-      interfacesNavToggle.querySelector(".nav-chevron").textContent = "▾";
-    }
-
     document.querySelectorAll(".page").forEach(x => {
       x.classList.toggle("active", x.id === "page-" + page);
     });
@@ -2065,7 +2012,7 @@
 
     history.replaceState(null, "", "#" + page);
     if (page === "dashboard") loadDashboard();
-    if (["interfaces", "bridges", "vlans"].includes(page)) loadInterfaces();
+    if (page === "interfaces") loadInterfaces();
     if (page === "wireless") loadWireless();
     if (page === "bridges") loadBridges();
     if (page === "routing") loadRoutes();
@@ -2423,7 +2370,7 @@
     loadConfigStatus();
     const page = location.hash.replace("#", "") || "dashboard";
     if (page === "dashboard") loadDashboard();
-    if (["interfaces", "bridges", "vlans"].includes(page)) loadInterfaces();
+    if (page === "interfaces") loadInterfaces();
     if (page === "wireless") loadWireless();
     if (page === "bridges") loadBridges();
     if (page === "routing") loadRoutes();
