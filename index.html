@@ -2346,8 +2346,11 @@
       document.getElementById("configMode").value = "edit-interface";
       document.getElementById("configName").value = name;
       document.getElementById("modalTitle").textContent = "Edit Interface — " + name;
-      document.getElementById("configFields").innerHTML = field("Primary IPv4 / prefix (leave blank to keep)", "address", data.addresses?.find(x => x.indexOf(":") < 0) || "", "text") + `<div class="form-group"><label>Additional IP addresses (one CIDR per line)</label><textarea class="input" id="cfg_additional_addresses" rows="4" placeholder="172.16.2.10/24\n172.16.2.11/24"></textarea><small>These are persistent systemd-networkd addresses. Remove a line to delete that additional address.</small></div>` + field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>`;
       const addressData = await api("/api/interfaces/" + encodeURIComponent(name) + "/addresses");
+      const primary = addressData.primary || data.addresses?.find(x => x.indexOf(":") < 0) || "";
+      const isDhcp = data.address_mode === "dhcp" || (data.address_mode !== "static" && !primary);
+      document.getElementById("configFields").innerHTML = addressFields("interface", isDhcp ? "dhcp" : "static", primary) + `<div class="form-group"><label>Additional IP addresses (one CIDR per line)</label><textarea class="input" id="cfg_additional_addresses" rows="4" placeholder="172.16.2.10/24\n172.16.2.11/24"></textarea><small>These are persistent systemd-networkd addresses. Remove a line to delete that additional address.</small></div>` + field("MTU", "mtu", data.mtu ?? 1500, "number") + `<div class="form-group"><label>State</label><select class="input" id="cfg_state"><option value="">Keep current</option><option value="up">Up</option><option value="down">Down</option></select></div>`;
+      toggleAddressField();
       document.getElementById("cfg_additional_addresses").value = (addressData.additional_addresses || []).join("\n");
       document.getElementById("configModal").classList.add("show");
     } catch (err) { showToast("Interface lookup failed: " + err.message); }
@@ -2366,9 +2369,9 @@
         `<div class="form-group"><small>${data.pending_changes ? 'Unapplied wireless changes exist. This form shows the last applied settings; saving will replace the pending settings for this interface.' : data.applied ? 'Showing last successfully applied wireless settings.' : 'No previously applied wireless configuration is saved.'}</small></div>` +
         field("SSID", "wifi_ssid", data.ssid || "") +
         `<div class="form-group"><label>WPA2 password</label><input class="input" type="password" id="cfg_wifi_password" autocomplete="new-password" placeholder="${data.password_configured ? 'Leave blank to keep current password' : '8–63 ASCII characters'}"><small>WPA2-Personal; password is not returned by the API.</small></div>` +
-        `<div class="form-group" id="wifi_client_network"><label>Add to bridge</label><select class="input" id="cfg_wifi_bridge" onchange="toggleWirelessMode()"><option value="">No bridge (configure IP on wireless interface)</option>${bridges.map(b => `<option value="${escapeHtml(b.name)}" ${data.bridge === b.name ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}</select><small>When bridged, DHCP/static IP belongs on the bridge, not the wireless interface. Client bridging also requires upstream Wi-Fi 4-address/WDS support.</small></div>` +
-        `<div class="form-group" id="wifi_client_address"><label>IPv4 configuration</label><select class="input" id="cfg_wifi_address_mode" onchange="toggleWirelessMode()"><option value="dhcp" ${data.address_mode === 'dhcp' ? 'selected' : ''}>DHCP</option><option value="static" ${data.address_mode === 'static' ? 'selected' : ''}>Static IP</option><option value="none" ${data.address_mode === 'none' ? 'selected' : ''}>No IPv4 address</option></select></div>` +
-        `<div id="wifi_client_static">${field("Static IPv4 (CIDR)", "wifi_address", data.address || "")}${field("Default gateway (optional)", "wifi_gateway", data.gateway || "")}${field("DNS servers (space-separated, optional)", "wifi_dns", data.dns || "")}</div>` +
+        `<div class="form-group" id="wifi_network"><label>Add to bridge</label><select class="input" id="cfg_wifi_bridge" onchange="toggleWirelessMode()"><option value="">No bridge (configure IP on wireless interface)</option>${bridges.map(b => `<option value="${escapeHtml(b.name)}" ${data.bridge === b.name ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}</select><small>When bridged, DHCP/static IP belongs on the bridge, not the wireless interface. Client bridging additionally requires upstream Wi-Fi 4-address/WDS support; AP bridging does not.</small></div>` +
+        `<div class="form-group" id="wifi_address"><label>IPv4 configuration</label><select class="input" id="cfg_wifi_address_mode" onchange="toggleWirelessMode()"><option value="dhcp" ${data.address_mode === 'dhcp' ? 'selected' : ''}>DHCP</option><option value="static" ${data.address_mode === 'static' ? 'selected' : ''}>Static IP</option><option value="none" ${data.address_mode === 'none' ? 'selected' : ''}>No IPv4 address</option></select></div>` +
+        `<div id="wifi_static">${field("Static IPv4 (CIDR)", "wifi_address", data.address || "")}${field("Default gateway (optional)", "wifi_gateway", data.gateway || "")}${field("DNS servers (space-separated, optional)", "wifi_dns", data.dns || "")}</div>` +
         `<div class="form-group" id="wifi_band_group"><label>Frequency band</label><select class="input" id="cfg_wifi_band" onchange="updateWirelessChannels()"><option value="2.4" ${data.band === '2.4' || !data.band ? 'selected' : ''}>2.4 GHz</option><option value="5" ${data.band === '5' ? 'selected' : ''}>5 GHz</option><option value="6" ${data.band === '6' ? 'selected' : ''}>6 GHz</option></select></div>` +
         `<div class="form-group" id="wifi_channel_group"><label>AP channel</label><select class="input" id="cfg_wifi_channel"></select><small id="wifi_band_note"></small></div>`;
       updateWirelessChannels(data.channel);
@@ -2389,13 +2392,12 @@
     const band = document.getElementById("wifi_band_group");
     if(band) band.style.display = cfg("wifi_mode") === "access_point" && cfg("wifi_enabled") === "true" ? "" : "none";
     if(channel) channel.style.display = cfg("wifi_mode") === "access_point" && cfg("wifi_enabled") === "true" ? "" : "none";
-    const client = cfg("wifi_mode") === "client";
-    const net = document.getElementById("wifi_client_network");
-    const addr = document.getElementById("wifi_client_address");
-    const stat = document.getElementById("wifi_client_static");
-    if(net) net.style.display = client ? "" : "none";
-    if(addr) addr.style.display = client && !cfg("wifi_bridge") ? "" : "none";
-    if(stat) stat.style.display = client && !cfg("wifi_bridge") && cfg("wifi_address_mode") === "static" ? "" : "none";
+    const net = document.getElementById("wifi_network");
+    const addr = document.getElementById("wifi_address");
+    const stat = document.getElementById("wifi_static");
+    if(net) net.style.display = "";
+    if(addr) addr.style.display = cfg("wifi_bridge") ? "none" : "";
+    if(stat) stat.style.display = !cfg("wifi_bridge") && cfg("wifi_address_mode") === "static" ? "" : "none";
   }
 
   async function editBridge(name) {
@@ -2455,8 +2457,8 @@
       let result;
       if (mode === "add-bridge") result = await api("/api/bridges", {method:"POST", body:JSON.stringify({name:cfg("name"), stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});
       else if (mode === "add-vlan") result = await api("/api/vlans", {method:"POST", body:JSON.stringify({name:cfg("name"), parent:cfg("parent"), vlan_id:num("vlan_id"), mtu:num("mtu"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
-      else if (mode === "edit-wireless") result = await api("/api/wireless/"+encodeURIComponent(name)+"/settings", {method:"PUT", body:JSON.stringify({mode:cfg("wifi_mode"),ssid:cfg("wifi_ssid"),password:cfg("wifi_password"),channel:cfg("wifi_mode")==="client"?"auto":cfg("wifi_channel"),band:cfg("wifi_mode")==="client"?"auto":cfg("wifi_band"),enabled:cfg("wifi_enabled")==="true",bridge:cfg("wifi_mode")==="client"?cfg("wifi_bridge"):"",address_mode:cfg("wifi_mode")==="client"?cfg("wifi_address_mode"):"none",address:cfg("wifi_address"),gateway:cfg("wifi_gateway"),dns:cfg("wifi_dns")})});
-      else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean), mtu:num("mtu"), state:cfg("state")||null})});
+      else if (mode === "edit-wireless") result = await api("/api/wireless/"+encodeURIComponent(name)+"/settings", {method:"PUT", body:JSON.stringify({mode:cfg("wifi_mode"),ssid:cfg("wifi_ssid"),password:cfg("wifi_password"),channel:cfg("wifi_mode")==="client"?"auto":cfg("wifi_channel"),band:cfg("wifi_mode")==="client"?"auto":cfg("wifi_band"),enabled:cfg("wifi_enabled")==="true",bridge:cfg("wifi_bridge"),address_mode:cfg("wifi_address_mode"),address:cfg("wifi_address"),gateway:cfg("wifi_gateway"),dns:cfg("wifi_dns")})});
+      else if (mode === "edit-interface") result = await api("/api/interfaces/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({address_mode:cfg("address_mode"), address:cfg("address_mode")==="static"?cfg("address")||null:null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean), mtu:num("mtu"), state:cfg("state")||null})});
       else if (mode === "edit-bridge") result = await api("/api/bridges/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({stp:cfg("stp")==="true", members:list("members"), address_mode:cfg("address_mode"), address:cfg("address")||null})});
       else if (mode === "edit-vlan") result = await api("/api/vlans/"+encodeURIComponent(name), {method:"PUT", body:JSON.stringify({mtu:num("mtu"), state:cfg("state")||null, address_mode:cfg("address_mode"), address:cfg("address")||null, additional_addresses:cfg("additional_addresses").split(/\r?\n/).map(x=>x.trim()).filter(Boolean)})});
       if (result && result.staged) {

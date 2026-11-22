@@ -56,10 +56,10 @@ def validate(name, cfg):
             raise ValueError('WPA passphrase must be 8–63 ASCII characters')
     if mode == 'access_point' and enabled and band == '6':
         raise ValueError('6 GHz AP requires WPA3-SAE and PMF; not supported by this WPA2 configuration yet')
-    bridge = str(cfg.get('bridge', '') or '').strip() if mode == 'client' else ''
+    bridge = str(cfg.get('bridge', '') or '').strip()
     if bridge and (not IFACE.fullmatch(bridge) or bridge.startswith('-')):
         raise ValueError('Invalid bridge name')
-    address_mode = str(cfg.get('address_mode', 'dhcp')) if mode == 'client' else 'none'
+    address_mode = str(cfg.get('address_mode', 'dhcp'))
     if address_mode not in ('dhcp', 'static', 'none'):
         raise ValueError('Address mode must be DHCP, static, or none')
     if bridge:
@@ -188,7 +188,7 @@ def _networkd_path(name):
 
 
 def _networkd_config(name, cfg):
-    if cfg['mode'] != 'client' or not cfg['enabled']:
+    if not cfg['enabled']:
         return None
     lines = ['[Match]', f'Name={name}', '', '[Network]']
     if cfg['bridge']:

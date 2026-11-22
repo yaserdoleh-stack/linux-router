@@ -93,6 +93,7 @@ async def logout():
 
 
 class InterfaceUpdate(BaseModel):
+    address_mode: str | None = None
     address: str | None = None
     additional_addresses: list[str] | None = None
     mtu: int | None = None
@@ -2301,7 +2302,17 @@ async def interface_detail(name: str):
     items = await get_interfaces()
     for item in items:
         if item["name"] == name:
-            return item
+            stage = interface_network_path(name, NETWORKD_STAGING_DIR)
+            live = interface_network_path(name)
+            path = stage if NETWORKD_STAGING_MARKER.exists() and stage.exists() else live
+            detail = dict(item)
+            if path.exists():
+                content = path.read_text()
+                if any(line.strip() in ("DHCP=ipv4", "DHCP=yes") for line in content.splitlines()):
+                    detail["address_mode"] = "dhcp"
+                elif any(line.strip().startswith("Address=") for line in content.splitlines()):
+                    detail["address_mode"] = "static"
+            return detail
     raise HTTPException(404, "Interface not found")
 
 
@@ -2350,13 +2361,15 @@ async def update_interface(name: str, update: InterfaceUpdate):
         live_path = interface_network_path(name)
         existing = path.read_text() if path.exists() else (live_path.read_text() if live_path.exists() else "")
         current_ipv4 = next((a for a in current.get("addresses", []) if ":" not in a), None)
-        if update.address:
+        if update.address_mode is not None:
+            mode, address = validate_ipv4_config(update.address_mode, update.address)
+        elif update.address:
             mode, address = validate_ipv4_config("static", update.address)
-        elif "DHCP=ipv4" in existing:
+        elif "DHCP=ipv4" in existing or "DHCP=yes" in existing:
             mode, address = "dhcp", None
-        elif any(line.startswith("Address=") for line in existing.splitlines()):
+        elif any(line.strip().startswith("Address=") for line in existing.splitlines()):
             mode = "static"
-            address = next((line.split("=", 1)[1].strip() for line in existing.splitlines() if line.startswith("Address=")), current_ipv4)
+            address = next((line.split("=", 1)[1].strip() for line in existing.splitlines() if line.strip().startswith("Address=")), current_ipv4)
         elif current_ipv4:
             mode, address = "static", current_ipv4
         else:
@@ -2373,7 +2386,7 @@ async def update_interface(name: str, update: InterfaceUpdate):
                 except ValueError:
                     pass
         if update.additional_addresses is None:
-            secondary = (existing_addresses if mode == "dhcp" else existing_addresses[1:]) if existing_addresses else []
+            secondary = (existing_addresses if mode == "dhcp" and update.address_mode is None else existing_addresses[1:]) if existing_addresses else []
         else:
             if len(update.additional_addresses) > 32:
                 raise HTTPException(400, "Maximum 32 additional IP addresses")
@@ -2386,8 +2399,10 @@ async def update_interface(name: str, update: InterfaceUpdate):
                 normalized = str(parsed)
                 if normalized not in secondary:
                     secondary.append(normalized)
-        if update.address:
-            primary = str(ipaddress.ip_interface(update.address))
+        if mode == "static":
+            primary = address
+        elif mode == "dhcp":
+            primary = None
         elif existing_addresses:
             primary = existing_addresses[0]
         else:
@@ -2417,7 +2432,7 @@ async def update_interface(name: str, update: InterfaceUpdate):
                     content += f"ActivationPolicy={update.state}\n"
                 content += "\n[Network]\n"
             else:
-                content = interface_network_content(name, mode, address, mtu, state=update.state)
+                content = interface_network_content(name, mode, primary, mtu, state=update.state)
             if secondary:
                 content += "".join(f"Address={ip}\n" for ip in secondary)
             path = interface_network_path(name, stage_dir)

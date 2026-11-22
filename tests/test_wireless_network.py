@@ -26,3 +26,18 @@ def test_bad_static_ip():
     with pytest.raises(ValueError):
         wm.validate('wlan0', {'mode': 'client', 'ssid': 'home', 'password': '12345678',
                               'address_mode': 'static', 'address': 'invalid'})
+
+@pytest.mark.parametrize('address_mode,expected', [('dhcp','DHCP=ipv4'), ('static','Address=192.168.9.2/24'), ('none','LinkLocalAddressing=no')])
+def test_ap_ip_modes(address_mode, expected):
+    cfg = wm.validate('wlan0', {'mode':'access_point','ssid':'test-ap','password':'12345678',
+                                'band':'2.4','channel':6,'address_mode':address_mode,
+                                'address':'192.168.9.2/24'})
+    assert expected in wm._networkd_config('wlan0', cfg)
+
+
+def test_ap_bridge_no_ip_and_no_4addr_requirement():
+    cfg = wm.validate('wlan0', {'mode':'access_point','ssid':'test-ap','password':'12345678',
+                                'bridge':'lan0','address_mode':'dhcp'})
+    assert cfg['address_mode'] == 'none'
+    assert 'Bridge=lan0' in wm._networkd_config('wlan0', cfg)
+    assert 'DHCP=' not in wm._networkd_config('wlan0', cfg)
