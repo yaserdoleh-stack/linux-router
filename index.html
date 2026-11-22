@@ -647,6 +647,47 @@
     transform: translateY(0);
   }
 
+  /* Persistent, dismissible error notifications */
+  .error-notifications {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    width: min(440px, calc(100vw - 44px));
+    max-height: 65vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 1001;
+    pointer-events: none;
+  }
+  .error-notification {
+    background: #351d27;
+    color: #ffe8ec;
+    border: 1px solid #d7687a;
+    border-radius: 9px;
+    padding: 12px 12px 12px 15px;
+    box-shadow: var(--shadow);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    pointer-events: auto;
+  }
+  .error-notification .error-message { flex: 1; }
+  .error-notification button {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 3px;
+    line-height: 1;
+  }
+  .toast { bottom: 22px; z-index: 1000; }
+  .toast.with-errors { bottom: calc(min(65vh, 280px) + 30px); }
+
   /* Responsive */
   @media (max-width: 1050px) {
     .stats-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -685,6 +726,12 @@
 .interface-group .group-count { min-width:28px; text-align:center; }
 
 .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;align-items:center;justify-content:center;z-index:1000;padding:20px}.modal-backdrop.show{display:flex}.modal{width:min(620px,100%);max-height:90vh;overflow:auto;background:var(--panel,#111827);border:1px solid var(--border,#273244);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:20px}.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.modal-header h2{margin:0 0 4px}.modal-header span{color:var(--muted,#94a3b8);font-size:12px}.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}.danger{border-color:#7f1d1d!important}.form-help{font-size:12px;color:var(--muted,#94a3b8);margin-top:-6px;margin-bottom:8px}
+
+  .nav-parent .nav-chevron { margin-left:auto; font-size:12px; opacity:.75; }
+  .nav-submenu { display:block; }
+  .nav-submenu.collapsed { display:none; }
+  .nav-child { padding-left:32px; font-size:13px; }
+  .nav-parent.child-active { color:var(--text,#e5e7eb); }
 </style>
 </head>
 
@@ -706,17 +753,25 @@
         <span class="nav-icon">⌂</span><span class="nav-label">Dashboard</span>
       </button>
       <div class="nav-section">Network</div>
-      <button class="nav-item" data-page="interfaces">
-        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span>
+      <button class="nav-item nav-parent" id="interfacesNavToggle" type="button" aria-expanded="true" aria-controls="interfacesSubmenu">
+        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span><span class="nav-chevron" aria-hidden="true">▾</span>
       </button>
+      <div class="nav-submenu" id="interfacesSubmenu">
+        <button class="nav-item nav-child" data-page="interfaces" type="button">
+          <span class="nav-icon">↳</span><span class="nav-label">Physical</span>
+        </button>
+        <button class="nav-item nav-child" data-page="bridges" type="button">
+          <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
+        </button>
+        <button class="nav-item nav-child" data-page="vlans" type="button">
+          <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
+        </button>
+      </div>
       <button class="nav-item" data-page="wireless">
         <span class="nav-icon">◉</span><span class="nav-label">Wireless</span>
       </button>
-      <button class="nav-item" data-page="bridges">
-        <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
-      </button>
-      <button class="nav-item" data-page="vlans">
-        <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
+      <button class="nav-item" data-page="floating">
+        <span class="nav-icon">◎</span><span class="nav-label">Floating IPs</span>
       </button>
       <button class="nav-item" data-page="firewall">
         <span class="nav-icon">◈</span><span class="nav-label">Firewall</span>
@@ -963,6 +1018,17 @@
                 <label style="display:flex;align-items:center;gap:8px;font-size:12px"><input type="checkbox" id="keaEnabled"> Enabled</label>
               </div>
               <form id="keaDhcpForm" onsubmit="stageDhcpConfig(event)">
+                <div class="card" style="margin-bottom:16px;padding:14px">
+                  <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="keaHaEnabled" onchange="toggleKeaHa()"> <strong>Enable High Availability (optional)</strong></label>
+                  <div class="form-help">Hot-standby Kea DHCP failover. Leave disabled for standalone DHCP. Both routers need matching DHCP configuration.</div>
+                  <div id="keaHaFields" style="display:none;margin-top:12px" class="form-grid">
+                    <div class="form-group"><label for="keaHaRole">This router's role</label><select class="input" id="keaHaRole" onchange="toggleKeaHa()"><option value="primary">Primary</option><option value="backup">Backup (standby)</option></select></div>
+                    <div class="form-group"><label for="keaHaPeer">Peer router permanent IPv4</label><input class="input" id="keaHaPeer" placeholder="172.16.2.252" inputmode="decimal"></div>
+                    <div class="form-group" id="keaSyncIntervalGroup"><label for="keaSyncInterval">DHCP configuration pull frequency</label><select class="input" id="keaSyncInterval"><option value="30">Every 30 seconds</option><option value="60">Every 60 seconds</option><option value="300">Every 5 minutes</option></select></div>
+                    <div class="form-group full"><label>Local HA address</label><div class="iface-meta" id="keaHaLocal">Automatically detected from DHCP listening interface</div><div class="form-help">Floating VRRP addresses are excluded. Exactly one permanent IPv4 address must remain. Kea HA HTTP control traffic uses TCP 8000: restrict access to the peer using firewall rules.</div></div>
+                  </div>
+                  <div class="form-help" style="margin-top:12px">HA backup routers automatically pull shared DHCP settings from the primary peer at the selected frequency. The primary address is taken from <strong>Peer router permanent IPv4</strong>. Requires a shared HTTP sync token on both routers.</div>
+                </div>
                 <div class="form-grid">
                   <div class="form-group full"><label for="keaInterface">Listen interface</label><select class="input" id="keaInterface" required></select><div class="form-help">Select the LAN-facing interface that should receive DHCP requests.</div></div>
                   <div class="form-group"><label for="keaSubnet">IPv4 subnet / CIDR</label><input class="input" id="keaSubnet" placeholder="192.168.1.0/24"></div>
@@ -1045,6 +1111,21 @@
               <tbody><tr><td colspan="8" class="mono">Loading VLAN data…</td></tr></tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <!-- FLOATING IP / VRRP -->
+      <div class="page" id="page-floating">
+        <div class="toolbar"><div class="toolbar-left">
+          <button class="btn primary" onclick="addFloatingIP()">+ Add Floating IP</button>
+          <button class="btn" onclick="loadFloatingIPs()">↻ Refresh</button>
+          <button class="btn primary" onclick="saveFloatingIPs()">Apply VRRP</button>
+        </div></div>
+        <div class="card"><div class="card-header"><div><h2>Cluster Floating IPs (VRRP)</h2>
+          <span>Configure the same virtual IP and VRID on both routers; use different priorities.</span></div></div>
+          <div class="card-body"><p>Requires keepalived. These addresses are owned only by the elected MASTER; do not configure them as static networkd addresses.</p>
+          <p>Apply VRRP updates keepalived immediately, independently of the network configuration Apply button. Ensure firewall rules permit VRRP protocol 112 between nodes.</p>
+          <div id="floatingRows"></div><span id="floatingStatus"></span></div>
         </div>
       </div>
 
@@ -1163,7 +1244,8 @@
     </form>
   </div>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="error-notifications" id="errorNotifications" aria-live="assertive" aria-label="Error messages"></div>
 
 <script>
   // FastAPI integration. Serve this file from the FastAPI static directory
@@ -1766,6 +1848,11 @@
     }));
   }
 
+  function toggleKeaHa() {
+    document.getElementById("keaHaFields").style.display = document.getElementById("keaHaEnabled").checked ? "grid" : "none";
+    document.getElementById("keaSyncIntervalGroup").style.display = document.getElementById("keaHaEnabled").checked && document.getElementById("keaHaRole").value === "backup" ? "block" : "none";
+  }
+
   async function loadDhcp() {
     try {
       const data = await api("/api/dhcp");
@@ -1778,6 +1865,12 @@
       }).join("");
       if (!selector.options.length) selector.innerHTML = `<option value="${escapeHtml(previous)}">${escapeHtml(previous)}</option>`;
       document.getElementById("keaEnabled").checked = !!config.enabled;
+      document.getElementById("keaHaEnabled").checked = !!config.ha_enabled;
+      document.getElementById("keaHaRole").value = config.ha_role || "primary";
+      document.getElementById("keaHaPeer").value = config.ha_peer_ip || "";
+      document.getElementById("keaSyncInterval").value = String([30,60,300].includes(Number(config.sync_interval)) ? config.sync_interval : 60);
+      document.getElementById("keaHaLocal").textContent = data.ha_local_ip || "Detected when HA is enabled and configuration is staged";
+      toggleKeaHa();
       document.getElementById("keaSubnet").value = config.subnet || "";
       document.getElementById("keaRouter").value = config.router || "";
       document.getElementById("keaPoolStart").value = config.pool_start || "";
@@ -1831,6 +1924,10 @@
     event.preventDefault();
     const payload = {
       enabled: document.getElementById("keaEnabled").checked,
+      ha_enabled: document.getElementById("keaHaEnabled").checked,
+      ha_role: document.getElementById("keaHaRole").value,
+      ha_peer_ip: document.getElementById("keaHaPeer").value.trim(),
+      sync_interval: Number(document.getElementById("keaSyncInterval").value),
       interface: document.getElementById("keaInterface").value,
       subnet: document.getElementById("keaSubnet").value.trim(),
       router: document.getElementById("keaRouter").value.trim(),
@@ -1862,6 +1959,62 @@
     }
   }
 
+  let floatingIPs = [];
+  const floatingEsc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function loadFloatingIPs() {
+    try {
+      const response = await fetch('/api/floating-ips');
+      if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+      const payload = await response.json();
+      floatingIPs = payload.floating_ips || [];
+      renderFloatingIPs();
+    } catch (err) { showToast('VRRP: ' + err.message); }
+  }
+  function renderFloatingIPs() {
+    document.getElementById('floatingRows').innerHTML = floatingIPs.map((e, i) => `
+      <div class="card" style="padding:12px;margin-bottom:12px">
+        <div class="form-grid">
+          <label>Interface <input class="input" data-float="${i}" data-key="interface" value="${floatingEsc(e.interface)}" placeholder="lan0"></label>
+          <label>Floating IP/CIDR <input class="input" data-float="${i}" data-key="address" value="${floatingEsc(e.address)}" placeholder="172.16.2.254/24"></label>
+          <label>VRRP ID (1–255) <input class="input" type="number" data-float="${i}" data-key="vrid" value="${e.vrid}"></label>
+          <label>Priority (1–254) <input class="input" type="number" data-float="${i}" data-key="priority" value="${e.priority}"></label>
+          <label>Advertisement seconds <input class="input" type="number" data-float="${i}" data-key="advert_int" value="${e.advert_int}"></label>
+          <label>Unicast source IP (optional) <input class="input" data-float="${i}" data-key="source_address" value="${floatingEsc(e.source_address)}"></label>
+          <label>Unicast peer IPs (comma-separated) <input class="input" data-float="${i}" data-key="peers" value="${floatingEsc((e.peers || []).join(', '))}"></label>
+          <label><input type="checkbox" data-float="${i}" data-key="preempt" ${e.preempt ? 'checked' : ''}> Allow preemption</label>
+        </div>
+        <div style="margin-top:8px">${e.owned_here ? 'MASTER (VIP present)' : 'BACKUP / VIP not present'} <button class="btn" onclick="removeFloatingIP(${i})">Remove</button></div>
+      </div>`).join('') || '<p>No floating IPs configured.</p>';
+  }
+  function collectFloatingIPs() {
+    document.querySelectorAll('[data-float]').forEach(el => {
+      const e = floatingIPs[Number(el.dataset.float)];
+      const k = el.dataset.key;
+      if (k === 'peers') e.peers = el.value.split(',').map(x => x.trim()).filter(Boolean);
+      else if (k === 'preempt') e.preempt = el.checked;
+      else if (['vrid','priority','advert_int'].includes(k)) e[k] = Number(el.value);
+      else e[k] = el.value.trim();
+    });
+  }
+  function addFloatingIP() {
+    collectFloatingIPs();
+    floatingIPs.push({interface:'lan0', address:'', vrid:51, priority:100, advert_int:1, peers:[], source_address:'', preempt:false});
+    renderFloatingIPs();
+  }
+  function removeFloatingIP(i) { collectFloatingIPs(); floatingIPs.splice(i, 1); renderFloatingIPs(); }
+  async function saveFloatingIPs() {
+    collectFloatingIPs();
+    if (!confirm('Apply VRRP configuration now? Incorrect cluster settings can cause duplicate VIP ownership.')) return;
+    try {
+      const response = await fetch('/api/floating-ips', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({floating_ips:floatingIPs})});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || response.statusText);
+      floatingIPs = result.floating_ips || [];
+      renderFloatingIPs();
+      showToast('VRRP configuration applied');
+    } catch (err) { showToast('VRRP apply failed: ' + err.message); }
+  }
+
   const pageInfo = {
     dashboard: ["Dashboard", "Router overview and live network status"],
     interfaces: ["Interfaces", "Physical Ethernet and other Linux interfaces"],
@@ -1871,12 +2024,21 @@
     firewall: ["Firewall", "Live nftables rules and chains"],
     dhcp: ["DHCP", "DHCP server configuration and active leases"],
     vlans: ["VLANs", "802.1Q VLAN configuration"],
+    floating: ["Floating IPs", "VRRP cluster virtual IP addresses"],
     vpn: ["VPN", "WireGuard tunnels and peers"],
     logs: ["Logs", "System and network service logs"],
     system: ["System", "Router operating system and services"]
   };
 
-  document.querySelectorAll(".nav-item").forEach(item => {
+  const interfacesNavToggle = document.getElementById("interfacesNavToggle");
+  const interfacesSubmenu = document.getElementById("interfacesSubmenu");
+  interfacesNavToggle.addEventListener("click", () => {
+    const collapsed = interfacesSubmenu.classList.toggle("collapsed");
+    interfacesNavToggle.setAttribute("aria-expanded", String(!collapsed));
+    interfacesNavToggle.querySelector(".nav-chevron").textContent = collapsed ? "▸" : "▾";
+  });
+
+  document.querySelectorAll(".nav-item[data-page]").forEach(item => {
     item.addEventListener("click", () => {
       navigate(item.dataset.page);
     });
@@ -1887,6 +2049,13 @@
       x.classList.toggle("active", x.dataset.page === page);
     });
 
+    interfacesNavToggle.classList.toggle("child-active", ["interfaces", "bridges", "vlans"].includes(page));
+    if (["interfaces", "bridges", "vlans"].includes(page)) {
+      interfacesSubmenu.classList.remove("collapsed");
+      interfacesNavToggle.setAttribute("aria-expanded", "true");
+      interfacesNavToggle.querySelector(".nav-chevron").textContent = "▾";
+    }
+
     document.querySelectorAll(".page").forEach(x => {
       x.classList.toggle("active", x.id === "page-" + page);
     });
@@ -1896,25 +2065,54 @@
 
     history.replaceState(null, "", "#" + page);
     if (page === "dashboard") loadDashboard();
-    if (page === "interfaces") loadInterfaces();
+    if (["interfaces", "bridges", "vlans"].includes(page)) loadInterfaces();
     if (page === "wireless") loadWireless();
     if (page === "bridges") loadBridges();
     if (page === "routing") loadRoutes();
     if (page === "firewall") { loadFirewall(); loadFirewallConfig(); }
     if (page === "vlans") loadVlans();
+    if (page === "floating") loadFloatingIPs();
     if (page === "dhcp") loadDhcp();
     if (page === "logs") loadLogs();
   }
 
-  function showToast(message) {
-    const toast = document.getElementById("toast");
-    toast.textContent = message;
-    toast.classList.add("show");
+  function showToast(message, type = "auto") {
+    const text = String(message ?? "Unknown error");
+    const isError = type === "error" || (type === "auto" &&
+      /(?:error|failed|failure|could not|unable|invalid|not found|too large|rejected|denied|unauthorized|forbidden)/i.test(text));
 
+    if (isError) {
+      // Errors remain visible until dismissed. Repeated identical messages
+      // are consolidated to avoid flooding the dashboard refresh loop.
+      const container = document.getElementById("errorNotifications");
+      const existing = Array.from(container.children).find(el => el.dataset.message === text);
+      if (existing) return;
+      const item = document.createElement("div");
+      item.className = "error-notification";
+      item.dataset.message = text;
+      item.setAttribute("role", "alert");
+      const label = document.createElement("span");
+      label.className = "error-message";
+      label.textContent = text;
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "Dismiss error message");
+      close.addEventListener("click", () => {
+        item.remove();
+        document.getElementById("toast").classList.toggle("with-errors", container.childElementCount > 0);
+      });
+      item.append(label, close);
+      container.appendChild(item);
+      document.getElementById("toast").classList.add("with-errors");
+      return;
+    }
+
+    const toast = document.getElementById("toast");
+    toast.textContent = text;
+    toast.classList.add("show");
     clearTimeout(window.toastTimer);
-    window.toastTimer = setTimeout(() => {
-      toast.classList.remove("show");
-    }, 2600);
+    window.toastTimer = setTimeout(() => toast.classList.remove("show"), 4000);
   }
 
   async function downloadRouterConfig() {
@@ -2225,12 +2423,13 @@
     loadConfigStatus();
     const page = location.hash.replace("#", "") || "dashboard";
     if (page === "dashboard") loadDashboard();
-    if (page === "interfaces") loadInterfaces();
+    if (["interfaces", "bridges", "vlans"].includes(page)) loadInterfaces();
     if (page === "wireless") loadWireless();
     if (page === "bridges") loadBridges();
     if (page === "routing") loadRoutes();
     if (page === "firewall") { loadFirewall(); loadFirewallConfig(); }
     if (page === "vlans") loadVlans();
+    if (page === "floating") loadFloatingIPs();
     if (page === "dhcp") loadDhcp();
     if (page === "logs") loadLogs();
   }

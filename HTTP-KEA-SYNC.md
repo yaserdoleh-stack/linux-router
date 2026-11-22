@@ -1,0 +1,10 @@
+# Kea DHCP configuration HTTP pull
+
+1. Install this package on **both** routers. Keep Kea HA configured and operational independently.
+2. Generate a 32-byte random token on the primary: `sudo install -d -m 700 /etc/router-manager && openssl rand -hex 32 | sudo tee /etc/router-manager/kea-sync.token >/dev/null && sudo chmod 600 /etc/router-manager/kea-sync.token`.
+3. Copy the exact token to `/etc/router-manager/kea-sync.token` on the backup, mode `0600`. Do not put the token in the web UI or config.json.
+4. Configure the primary as HA Primary and Apply. The export endpoint is `GET http://PRIMARY-IP/api/kea/config/export` with header `Authorization: Bearer TOKEN`.
+5. Configure the backup as HA Backup, enter the primary permanent IP in the existing HA peer field; Apply. Pull synchronization is always enabled on HA backups at the backup-selected pull frequency (30 seconds, 60 seconds by default, or 5 minutes). The backup polls automatically and can also be triggered with authenticated `POST /api/kea/config/pull`.
+6. Keep TCP 80 restricted to the backup's management IP on the primary; keep Router Manager's web UI private. Use a trusted dedicated management network. **Plain HTTP exposes the token and configuration to interception and modification; it is not appropriate on an untrusted network.**
+
+Only subnet, pool, router option, DNS, domain, lease lifetime, reservations and enabled status are synchronized. The backup retains local HA settings, interface and sync settings. Staged local DHCP edits suspend polling until resolved. Changed configuration is validated using Kea's syntax checker before installation. On activation failure, Router Manager attempts to restore the prior Kea file and restart the service; if rollback fails, manual intervention is required. Sync status is available through `/api/dhcp` under `sync_status` (authenticated session required). The backup keeps its last working configuration if the primary is unavailable. Kea HA lease synchronization remains separate.

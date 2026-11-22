@@ -1,0 +1,15 @@
+[Unit]
+Description=Router Manager VRRP floating IPs (keepalived)
+Documentation=man:keepalived(8)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/keepalived/router-manager-vrrp.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/keepalived --dont-fork --log-console --use-file=/etc/keepalived/router-manager-vrrp.conf --pid=/run/router-manager-vrrp.pid --vrrp_pid=/run/router-manager-vrrp-child.pid
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

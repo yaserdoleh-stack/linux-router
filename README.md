@@ -204,3 +204,63 @@ Do not protect a management or LAN interface until explicit allow rules are
 available. Apply only from a local console or with independent recovery access.
 Other nftables base chains can still independently drop traffic; an `accept`
 verdict in one base chain does not override drops in another.
+
+## Floating IPs for router clusters (VRRP)
+
+The **Network → Floating IPs** page manages VRRP virtual IP addresses on any
+existing Ethernet interface, bridge or VLAN. Requires `keepalived` installed on
+both cluster routers (`sudo apt install keepalived`). The installer adds a
+**separate** `router-manager-vrrp.service` and does not replace the system's
+existing keepalived service. Do not run a second keepalived daemon controlling
+identical VRIDs/VIPs; disable the conflicting service manually if applicable.
+
+On both nodes enter the **same floating IP/CIDR, interface and VRID** and use
+different priorities (e.g. 150 primary, 100 secondary). Configure local unicast
+source and remote peer addresses on each node if multicast VRRP is not allowed.
+The VIP must not be configured as a static address in systemd-networkd. VRRP
+protocol 112 must be allowed between routers by nftables; otherwise both nodes
+may become MASTER. IPv4 VRRP requires layer-2 adjacency; floating IPs are not
+synchronized between different broadcast domains. Avoid using the same VRID
+for multiple independent instances on the same interface.
+
+Click **Apply VRRP** to validate and activate immediately; this is independent
+of the general networkd Apply. Configuration persists in
+`/var/lib/router-manager/config.json`, and generated keepalived configuration
+is written to `/etc/keepalived/router-manager-vrrp.conf`. The dedicated service
+is enabled after a successful nonempty configuration. The UI's VIP presence
+status is an address observation, not an authoritative VRRP state report.
+
+**Important:** VRRP only moves an IP address. It does not synchronize DHCP
+leases, firewall connection tracking, NAT state, routes, or application data.
+Test failover and failback on a nonproduction network before relying on it.
+
+### Optional Kea DHCP HA (experimental)
+
+In DHCP > Kea Configuration, select **Enable High Availability** to use Kea
+hot-standby HA. Default is **off**; standalone DHCP is unchanged. Select
+Primary on one router and Backup on the other; enter the **other** router's
+permanent IPv4 address. The local endpoint is discovered from the selected
+DHCP listening interface; floating VRRP IPs in Router Manager are excluded.
+The interface must have exactly one eligible permanent IPv4 address.
+
+Requires Kea HA and lease-commands hook libraries (`libdhcp_ha.so` and
+`libdhcp_lease_cmds.so`). Both nodes must have the same subnet, pool,
+reservations, and lease settings. Kea HA exchanges control traffic over
+HTTP TCP/8000 bound to each router's permanent address. **Restrict inbound
+TCP/8000 to the peer router in nftables before enabling HA; the generated
+control socket does not configure authentication or TLS.** Do not expose it
+on WAN or an untrusted LAN. Permit peer traffic in both directions. Check
+Kea logs and HA state before relying on failover. The feature is not tested
+against a live Kea installation and may require changes for your Kea version.
+
+The HA endpoint is selected at Apply/startup; changing interface addresses
+requires regenerating the Kea configuration. No automatic cross-router
+synchronization of DHCP configuration is provided: configure both nodes.
+
+## Optional Kea HA DHCP configuration HTTP pull
+
+See `HTTP-KEA-SYNC.md`. The HA backup pulls shared Kea DHCP settings from the HA primary every 60 seconds by default. Local interface, HA role, HA peer IP and sync settings are preserved. The primary exports only shared DHCP settings via a bearer-token-protected read-only HTTP endpoint. A candidate is validated before activation, with best-effort rollback if service activation fails. Plain HTTP is **not encrypted or tamper-resistant**; use only on an isolated trusted management network, restrict TCP 80 to known peers, and prefer HTTPS if network trust cannot be guaranteed. Never expose this endpoint to the internet.
+
+### Automatic HTTP pull on HA backup
+
+When Kea HA is enabled with Backup role, Router Manager automatically polls the primary permanent IPv4 from the existing HA peer setting every 60 seconds. There is no separate HTTP sync checkbox or address field. Set up the shared bearer token as described in `HTTP-KEA-SYNC.md`. HTTP is plaintext and must be confined to a trusted management network.

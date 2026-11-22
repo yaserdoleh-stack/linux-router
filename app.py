@@ -21,6 +21,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from auth import COOKIE, read_auth, verify_password, issue_session, valid_session
 from collections import defaultdict, deque
+import floating_ip
+import kea_http_sync as dhcp_sync
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Linux Router Manager API", version="1.0.0")
@@ -31,12 +33,12 @@ LOGIN_ATTEMPTS = defaultdict(deque)
 @app.middleware("http")
 async def require_login(request: Request, call_next):
     path = request.url.path
-    if path not in ('/login', '/api/auth/login'):
+    if path not in ('/login', '/api/auth/login', '/api/kea/config/export') :
         if not valid_session(request.cookies.get(COOKIE, '')):
             if path == '/' or not path.startswith('/api/'):
                 return RedirectResponse('/login', status_code=303)
             return JSONResponse({'detail': 'Authentication required'}, status_code=401)
-    if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+    if request.method not in ('GET', 'HEAD', 'OPTIONS') :
         origin = request.headers.get('origin')
         referer = request.headers.get('referer')
         host = request.headers.get('host', '')
@@ -175,6 +177,12 @@ class KeaDhcpConfig(BaseModel):
     domain_name: str | None = None
     valid_lifetime: int = 86400
     reservations: list[KeaReservation] = Field(default_factory=list)
+    ha_enabled: bool = False
+    ha_role: str = "primary"
+    ha_peer_ip: str = ""
+    sync_enabled: bool = False  # Legacy input ignored: derived from HA backup role
+    sync_peer_url: str = ""  # Legacy input ignored: derived from HA peer IPv4
+    sync_interval: int = 60
 
 
 NETWORKD_DIR = Path("/etc/systemd/network")
@@ -581,6 +589,7 @@ def _read_applied_config_json() -> dict | None:
             result["kea_dhcp"] = _normalize_kea_dhcp_config(payload["kea_dhcp"])
         if "firewall" in payload:
             result["firewall"] = _normalize_firewall(payload["firewall"])
+        result["floating_ips"] = floating_ip.validate(payload.get("floating_ips", []))
         result["dhcp_lease_aliases"] = _normalize_lease_aliases(payload.get("dhcp_lease_aliases", {}))
         return result
     except (OSError, json.JSONDecodeError, ValueError, TypeError, AttributeError) as exc:
@@ -654,6 +663,7 @@ def _write_applied_config_json(routes: list[dict], kea_dhcp: dict | None = None)
     if prior and "firewall" in prior:
         payload["firewall"] = prior["firewall"]
     if prior:
+        payload["floating_ips"] = prior.get("floating_ips", [])
         payload["dhcp_lease_aliases"] = prior.get("dhcp_lease_aliases", {})
     APPLIED_CONFIG_JSON.parent.mkdir(parents=True, exist_ok=True)
     tmp = APPLIED_CONFIG_JSON.with_suffix(".json.tmp")
@@ -1486,6 +1496,7 @@ def _default_kea_dhcp_config(interfaces: list[dict] | None = None) -> dict:
         "domain_name": None,
         "valid_lifetime": 86400,
         "reservations": [],
+        "ha_enabled": False, "ha_role": "primary", "ha_peer_ip": "", "sync_enabled": False, "sync_peer_url": "", "sync_interval": 60,
     }
 
 
@@ -1502,6 +1513,7 @@ def _normalize_kea_dhcp_config(raw: dict) -> dict:
                 "pool_start": "", "pool_end": "", "router": "",
                 "dns_servers": [], "domain_name": None, "valid_lifetime": lifetime,
                 "reservations": config.get("reservations", []),
+                "ha_enabled": False, "ha_role": "primary", "ha_peer_ip": "", "sync_enabled": False, "sync_peer_url": "", "sync_interval": 60,
             }
         subnet_value = config["subnet"].strip()
         network = ipaddress.ip_network(subnet_value, strict=False)
@@ -1563,8 +1575,35 @@ def _normalize_kea_dhcp_config(raw: dict) -> dict:
         domain = (config.get("domain_name") or "").strip() or None
         if domain and (len(domain) > 253 or not re.fullmatch(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*", domain)):
             raise ValueError("Invalid DNS domain name")
+        ha_enabled = bool(config.get("ha_enabled", False))
+        role = config.get("ha_role", "primary")
+        peer = str(config.get("ha_peer_ip") or "").strip()
+        if ha_enabled:
+            if not config["enabled"]:
+                raise ValueError("Enable the DHCP server before enabling HA")
+            if role not in ("primary", "backup"):
+                raise ValueError("HA role must be primary or backup")
+            try:
+                peer_addr = ipaddress.IPv4Address(peer)
+            except ipaddress.AddressValueError as exc:
+                raise ValueError("Enter the peer router's permanent IPv4 address") from exc
+            if not peer_addr.is_private and not peer_addr.is_global:
+                raise ValueError("Peer address must be a usable unicast IPv4 address")
+            peer = str(peer_addr)
+        # A Kea HA backup always pulls from its already-configured primary peer.
+        # Ignore legacy UI/API sync toggles and addresses to prevent divergence.
+        sync_enabled = bool(ha_enabled and role == "backup")
+        sync_url = peer if sync_enabled else ""
+        interval = int(config.get("sync_interval", 60))
+        if interval not in (30, 60, 300):
+            raise ValueError("DHCP sync interval must be 30, 60, or 300 seconds")
+        if sync_enabled:
+            dhcp_sync.validate_host(sync_url)
         return {
             "enabled": bool(config["enabled"]),
+            "ha_enabled": ha_enabled, "ha_role": role if ha_enabled else "primary",
+            "ha_peer_ip": peer if ha_enabled else "",
+            "sync_enabled": sync_enabled, "sync_peer_url": sync_url if sync_enabled else "", "sync_interval": interval,
             "interface": interface,
             "subnet": str(network),
             "pool_start": str(start),
@@ -1582,6 +1621,51 @@ def _normalize_kea_dhcp_config(raw: dict) -> dict:
         raise HTTPException(400, f"Invalid Kea DHCP configuration: {exc}") from exc
 
 
+def _kea_ha_local_ip(config: dict) -> str:
+    """Resolve a unique permanent IPv4 address on the DHCP listening interface."""
+    interface = validate_ifname(config["interface"])
+    try:
+        result = subprocess.run(["ip", "-j", "-4", "addr", "show", "dev", interface],
+                                capture_output=True, text=True, check=True, timeout=5)
+        links = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Cannot inspect IPv4 addresses on {interface}: {exc}") from exc
+    vips = set()
+    try:
+        for entry in floating_ip.read():
+            if entry["interface"] == interface:
+                addr = ipaddress.ip_interface(entry["address"])
+                if addr.version == 4:
+                    vips.add(str(addr.ip))
+    except (OSError, ValueError, KeyError) as exc:
+        raise ValueError(f"Cannot determine floating IP exclusions: {exc}") from exc
+    eligible = []
+    for link in links:
+        for addr in link.get("addr_info", []):
+            if addr.get("family") != "inet" or addr.get("scope") != "global":
+                continue
+            ip = ipaddress.IPv4Address(addr["local"])
+            if str(ip) not in vips and not ip.is_loopback and not ip.is_link_local:
+                eligible.append(str(ip))
+    eligible = sorted(set(eligible), key=lambda value: int(ipaddress.IPv4Address(value)))
+    if len(eligible) != 1:
+        raise ValueError(f"HA requires exactly one permanent IPv4 address on {interface}; "
+                         f"found {eligible}. Exclude floating IPs or adjust interface addressing")
+    if eligible[0] == config["ha_peer_ip"]:
+        raise ValueError("Peer IP cannot equal this router's permanent IP")
+    return eligible[0]
+
+
+def _kea_ha_hook_path(name: str) -> str:
+    candidates = [Path("/usr/lib/kea/hooks"), Path("/usr/lib/x86_64-linux-gnu/kea/hooks"),
+                  Path("/usr/local/lib/kea/hooks"), Path("/usr/lib/aarch64-linux-gnu/kea/hooks")]
+    for folder in candidates:
+        path = folder / name
+        if path.is_file():
+            return str(path)
+    raise ValueError(f"Missing Kea hook {name}; install the Kea hooks package")
+
+
 def _kea_dhcp4_document(config: dict) -> dict:
     options = [{"name": "routers", "data": config["router"]}]
     if config.get("dns_servers"):
@@ -1589,7 +1673,7 @@ def _kea_dhcp4_document(config: dict) -> dict:
     if config.get("domain_name"):
         options.append({"name": "domain-name", "data": config["domain_name"]})
     lifetime = int(config["valid_lifetime"])
-    return {
+    document = {
         "Dhcp4": {
             "interfaces-config": {"interfaces": [config["interface"]]},
             "lease-database": {
@@ -1616,6 +1700,31 @@ def _kea_dhcp4_document(config: dict) -> dict:
             }],
         }
     }
+
+    if config.get("ha_enabled"):
+        local = _kea_ha_local_ip(config)
+        peer = config["ha_peer_ip"]
+        role = config["ha_role"]
+        # Both nodes must use identical server names, with complementary this-server-name.
+        document["Dhcp4"]["control-socket"] = {
+            "socket-type": "http", "socket-address": local, "socket-port": 8001
+        }
+        document["Dhcp4"]["hooks-libraries"] = [
+            {"library": _kea_ha_hook_path("libdhcp_lease_cmds.so")},
+            {"library": _kea_ha_hook_path("libdhcp_ha.so"), "parameters": {
+                "high-availability": [{
+                    "this-server-name": "primary" if role == "primary" else "standby",
+                    "mode": "hot-standby", "heartbeat-delay": 10000,
+                    "max-response-delay": 60000, "max-ack-delay": 10000,
+                    "max-unacked-clients": 10,
+                    "peers": [
+                        {"name": "primary", "url": f"http://{local if role == 'primary' else peer}:8000/", "role": "primary"},
+                        {"name": "standby", "url": f"http://{peer if role == 'primary' else local}:8000/", "role": "standby"}
+                    ]
+                }]
+            }}
+        ]
+    return document
 
 
 async def _find_kea_service_unit() -> str | None:
@@ -2372,6 +2481,29 @@ async def get_log_lines(lines: int = 50) -> list[str]:
     return [line for line in raw.splitlines() if line.strip()]
 
 
+class FloatingIPUpdate(BaseModel):
+    floating_ips: list[dict] = Field(default_factory=list)
+
+
+@app.get("/api/floating-ips")
+async def get_floating_ips():
+    try:
+        entries = floating_ip.read()
+        return {"floating_ips": floating_ip.status(entries)}
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.put("/api/floating-ips")
+async def put_floating_ips(update: FloatingIPUpdate):
+    try:
+        return {"floating_ips": await asyncio.to_thread(floating_ip.install, update.floating_ips)}
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
 @app.get("/api/bridges")
 async def bridges():
     try:
@@ -2950,6 +3082,102 @@ async def discard_config():
         raise HTTPException(500, str(exc))
 
 
+# The export endpoint exposes only shared DHCP fields, never router credentials.
+# A token file is required on both routers; never accept an unauthenticated request.
+_kea_pull_lock = asyncio.Lock()
+_kea_pull_status = {"last_success": None, "last_error": None, "last_hash": None}
+
+@app.get("/api/kea/config/export")
+async def export_shared_kea_config(request: Request):
+    import hmac
+    token = dhcp_sync.read_token()
+    authorization = request.headers.get("authorization", "")
+    if request.method != "GET" or not token or not hmac.compare_digest(authorization, "Bearer " + token):
+        raise HTTPException(401, "Unauthorized")
+    applied = (_read_applied_config_json() or {}).get("kea_dhcp") or {}
+    if not applied.get("enabled") or not applied.get("ha_enabled") or applied.get("ha_role") != "primary":
+        raise HTTPException(409, "This router is not an enabled Kea HA primary")
+    shared = dhcp_sync.shared_only(applied)
+    return {"config": shared, "sha256": dhcp_sync.config_hash(shared)}
+
+async def _pull_kea_config_once():
+    async with _kea_pull_lock:
+        applied_root = _read_applied_config_json() or {}
+        local = applied_root.get("kea_dhcp") or {}
+        if not (local.get("ha_enabled") and local.get("ha_role") == "backup"):
+            return {"status": "disabled"}
+        if _pending_json_payload().get("kea_dhcp") is not None:
+            return {"status": "skipped", "reason": "Local DHCP changes are staged"}
+        try:
+            primary = await asyncio.to_thread(dhcp_sync.fetch, local["ha_peer_ip"])
+            shared = primary["config"]
+            dhcp_sync.verify_payload(primary)
+            merged = _normalize_kea_dhcp_config(dhcp_sync.merge(shared, local))
+            if not merged.get("sync_enabled") or merged.get("ha_role") != "backup":
+                raise ValueError("Backup HA settings were not preserved")
+            # Compare shared values only; do not restart Kea for unchanged exports.
+            if dhcp_sync.shared_only(merged) == dhcp_sync.shared_only(local):
+                _kea_pull_status.update(last_success=time.time(), last_error=None, last_hash=primary["sha256"])
+                return {"status": "unchanged"}
+            await _validate_kea_dhcp_install(merged)
+            old_bytes = KEA_DHCP4_CONFIG.read_bytes() if KEA_DHCP4_CONFIG.exists() else None
+            try:
+                await _apply_kea_dhcp_config(merged)
+                new_root = dict(applied_root)
+                new_root["kea_dhcp"] = merged
+                _atomic_applied_config_for_sync(new_root)
+            except Exception:
+                if old_bytes is not None:
+                    tmp = KEA_DHCP4_CONFIG.with_name(KEA_DHCP4_CONFIG.name + ".rollback-tmp")
+                    tmp.write_bytes(old_bytes)
+                    os.chmod(tmp, 0o644)
+                    os.replace(tmp, KEA_DHCP4_CONFIG)
+                    unit = await _find_kea_service_unit()
+                    if unit:
+                        try:
+                            await run_command("systemctl", "restart", unit)
+                        except Exception:
+                            logging.exception("Kea rollback restart failed; manual recovery required")
+                raise
+            _kea_pull_status.update(last_success=time.time(), last_error=None, last_hash=primary["sha256"])
+            return {"status": "applied"}
+        except Exception as exc:
+            _kea_pull_status["last_error"] = str(exc)
+            logging.exception("Kea HTTP pull failed; retaining previous applied configuration")
+            raise
+
+def _atomic_applied_config_for_sync(root):
+    APPLIED_CONFIG_JSON.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix="kea-sync-", dir=APPLIED_CONFIG_JSON.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(root, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, 0o600)
+        os.replace(name, APPLIED_CONFIG_JSON)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+@app.post("/api/kea/config/pull")
+async def manual_pull_kea_config():
+    try:
+        return await _pull_kea_config_once()
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+async def _kea_pull_loop():
+    while True:
+        applied = (_read_applied_config_json() or {}).get("kea_dhcp") or {}
+        interval = int(applied.get("sync_interval", 60))
+        if applied.get("ha_enabled") and applied.get("ha_role") == "backup":
+            try:
+                await _pull_kea_config_once()
+            except Exception:
+                pass
+        await asyncio.sleep(interval if interval in (30, 60, 300) else 60)
+
 @app.post("/api/config/apply")
 async def apply_config():
     try:
@@ -2962,6 +3190,15 @@ async def apply_config():
         raise
     except Exception as exc:
         raise HTTPException(500, str(exc))
+
+
+def _safe_kea_ha_local_ip(config: dict) -> str | None:
+    if not config.get("ha_enabled"):
+        return None
+    try:
+        return _kea_ha_local_ip(config)
+    except (ValueError, KeyError):
+        return None
 
 
 @app.get("/api/dhcp")
@@ -2993,6 +3230,9 @@ async def get_dhcp_config():
             {"name": item["name"], "type": item.get("type"), "addresses": item.get("addresses", [])}
             for item in interfaces if item["name"] != "lo"
         ],
+        "ha_local_ip": _safe_kea_ha_local_ip(config),
+        "sync_configured": bool(config.get("ha_enabled") and config.get("ha_role") == "backup"),
+        "sync_status": _kea_pull_status,
         "pending": "kea_dhcp" in pending and config != applied.get("kea_dhcp"),
     }
 
@@ -3004,17 +3244,11 @@ async def stage_dhcp_config(config: KeaDhcpConfig):
     selected_interface = next((item for item in interfaces if item["name"] == normalized["interface"]), None)
     if selected_interface is None:
         raise HTTPException(400, f"Interface {normalized['interface']} does not exist")
-    if normalized["enabled"] and normalized["router"]:
-        configured_ipv4 = set()
-        for address in selected_interface.get("addresses", []):
-            try:
-                ipif = ipaddress.ip_interface(address)
-                if ipif.version == 4:
-                    configured_ipv4.add(str(ipif.ip))
-            except ValueError:
-                continue
-        if configured_ipv4 and normalized["router"] not in configured_ipv4:
-            raise HTTPException(400, "The DHCP router address must match an IPv4 address currently assigned to the selected interface")
+    if normalized.get("ha_enabled"):
+        try:
+            _kea_dhcp4_document(normalized)  # Check IP selection and installed HA hooks.
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, f"Invalid Kea HA configuration: {exc}") from exc
     prepare_staging()
     payload = _pending_json_payload()
     files = payload.get("files", {})
@@ -3119,8 +3353,19 @@ async def startup_sync_systemd_networkd_from_json():
                 print(f"WARNING: Could not restore firewall at startup: {exc}", flush=True)
     except Exception as exc:
         raise RuntimeError(f"Router Manager startup configuration import failed: {exc}") from exc
+    app.state.kea_pull_task = asyncio.create_task(_kea_pull_loop())
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=80, reload=False)
+
+@app.on_event("shutdown")
+async def stop_kea_pull():
+    task = getattr(app.state, "kea_pull_task", None)
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
