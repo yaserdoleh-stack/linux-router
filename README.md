@@ -15,6 +15,38 @@ A web-based management interface for a Linux router, built with **FastAPI** and 
 - **System controls:** Reboot and shut down the router from the web interface.
 - **Administrator login:** Password-protected UI and API, signed session cookies, and a sign-out action.
 
+## Screenshots
+
+Screenshots of the Router Manager web interface. Public WAN addresses shown in these images have been replaced with [documentation-only example addresses](https://www.rfc-editor.org/rfc/rfc5737) (`203.0.113.0/24` and `198.51.100.0/24`).
+
+### Dashboard
+
+![Router dashboard with traffic monitoring and interface status](screenshots/dashboard.png)
+
+### Connected devices and neighbors
+
+![ARP neighbors and DHCP clients](screenshots/neighbors-1.png)
+
+![Additional connected devices and recent events](screenshots/neighbors-2.png)
+
+### Bridges and VRRP
+
+![Linux bridge management](screenshots/bridges.png)
+
+![VRRP floating IP management](screenshots/floating-ips.png)
+
+### Firewall and routing
+
+![nftables firewall and NAT management](screenshots/firewall.png)
+
+![Linux routing table](screenshots/routing.png)
+
+### Kea DHCP
+
+![DHCP server and high availability settings](screenshots/dhcp-settings.png)
+
+![DHCP reservations](screenshots/dhcp-reservations.png)
+
 ## Requirements
 
 - A Linux distribution using **systemd** and **systemd-networkd** (primarily developed for Ubuntu).
