@@ -130,6 +130,14 @@
     opacity: .9;
   }
 
+  .nav-parent { cursor: pointer; }
+  .nav-chevron { margin-left: auto; font-size: 12px; transition: transform .15s ease; }
+  .nav-parent[aria-expanded="false"] .nav-chevron { transform: rotate(-90deg); }
+  .nav-parent.parent-active { color: #dce8ff; }
+  .nav-submenu { margin-left: 13px; padding-left: 8px; border-left: 1px solid #344158; }
+  .nav-submenu[hidden] { display: none; }
+  .nav-child { padding-left: 12px; }
+
   .sidebar-footer {
     margin-top: auto;
     padding: 14px;
@@ -710,6 +718,8 @@
       justify-content: center;
       padding: 11px 0;
     }
+    .nav-submenu { margin-left: 0; padding-left: 0; border-left: 0; }
+    .nav-chevron { display: none; }
     .content { padding: 18px 14px 30px; }
     .topbar { padding: 0 14px; }
     .top-actions .btn:not(.primary) { display: none; }
@@ -747,17 +757,22 @@
         <span class="nav-icon">⌂</span><span class="nav-label">Dashboard</span>
       </button>
       <div class="nav-section">Network</div>
-      <button class="nav-item" data-page="interfaces">
-        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span>
+      <button class="nav-item nav-parent" id="interfacesNavToggle" type="button" aria-expanded="true" aria-controls="interfacesSubmenu">
+        <span class="nav-icon">⇄</span><span class="nav-label">Interfaces</span><span class="nav-chevron" aria-hidden="true">▾</span>
       </button>
+      <div class="nav-submenu" id="interfacesSubmenu">
+        <button class="nav-item nav-child" data-page="interfaces" type="button">
+          <span class="nav-icon">▦</span><span class="nav-label">Physical</span>
+        </button>
+        <button class="nav-item nav-child" data-page="bridges" type="button">
+          <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
+        </button>
+        <button class="nav-item nav-child" data-page="vlans" type="button">
+          <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
+        </button>
+      </div>
       <button class="nav-item" data-page="wireless">
         <span class="nav-icon">◉</span><span class="nav-label">Wireless</span>
-      </button>
-      <button class="nav-item" data-page="bridges">
-        <span class="nav-icon">▤</span><span class="nav-label">Bridges</span>
-      </button>
-      <button class="nav-item" data-page="vlans">
-        <span class="nav-icon">◇</span><span class="nav-label">VLANs</span>
       </button>
       <button class="nav-item" data-page="floating">
         <span class="nav-icon">◎</span><span class="nav-label">Floating IPs</span>
@@ -1980,7 +1995,7 @@
 
   const pageInfo = {
     dashboard: ["Dashboard", "Router overview and live network status"],
-    interfaces: ["Interfaces", "Physical Ethernet and other Linux interfaces"],
+    interfaces: ["Physical Interfaces", "Physical Ethernet and other Linux interfaces"],
     wireless: ["Wireless", "Linux wireless network interfaces"],
     bridges: ["Bridges", "Linux bridge devices and member interfaces"],
     routing: ["Routing", "Kernel routing table and static routes"],
@@ -1992,6 +2007,14 @@
     system: ["System", "Router operating system and services"]
   };
 
+  const interfacesNavToggle = document.getElementById("interfacesNavToggle");
+  const interfacesSubmenu = document.getElementById("interfacesSubmenu");
+  interfacesNavToggle.addEventListener("click", () => {
+    const expanded = interfacesNavToggle.getAttribute("aria-expanded") !== "true";
+    interfacesNavToggle.setAttribute("aria-expanded", String(expanded));
+    interfacesSubmenu.hidden = !expanded;
+  });
+
   document.querySelectorAll(".nav-item").forEach(item => {
     item.addEventListener("click", () => {
       navigate(item.dataset.page);
@@ -1999,6 +2022,12 @@
   });
 
   function navigate(page) {
+    const interfacePage = ["interfaces", "bridges", "vlans"].includes(page);
+    interfacesNavToggle.classList.toggle("parent-active", interfacePage);
+    if (interfacePage) {
+      interfacesNavToggle.setAttribute("aria-expanded", "true");
+      interfacesSubmenu.hidden = false;
+    }
     document.querySelectorAll(".nav-item").forEach(x => {
       x.classList.toggle("active", x.dataset.page === page);
     });
