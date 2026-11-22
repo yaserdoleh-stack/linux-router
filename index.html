@@ -1033,8 +1033,8 @@
                 </div>
                 <div style="margin-bottom:12px;display:flex;gap:8px;align-items:end;flex-wrap:wrap">
                   <div class="form-group" style="flex:1"><label for="keaNetworkSelect">DHCP networks</label><select class="input" id="keaNetworkSelect" onchange="switchKeaNetwork()"></select></div>
-                  <button type="button" class="btn" onclick="addKeaNetwork()">+ Add network</button>
-                  <button type="button" class="btn" onclick="removeKeaNetwork()">Remove network</button>
+                  <button type="button" class="btn" id="keaAddNetworkButton" onclick="addKeaNetwork()">+ Add network</button>
+                  <button type="button" class="btn" id="keaRemoveNetworkButton" onclick="removeKeaNetwork()">Remove network</button>
                 </div>
                 <div class="form-help" style="margin-bottom:12px">Each network has its own interface, subnet, pool, gateway, DNS, lease time and reservations. The server listens on all selected network interfaces.</div>
                 <div class="form-grid">
@@ -1930,6 +1930,8 @@
       });
       document.getElementById("keaEnabled").disabled = keaReadOnly;
       document.getElementById("keaBackupReadOnly").style.display = keaReadOnly ? "block" : "none";
+      document.getElementById("keaAddNetworkButton").style.display = keaReadOnly ? "none" : "";
+      document.getElementById("keaRemoveNetworkButton").style.display = keaReadOnly ? "none" : "";
       const status = document.getElementById("keaStatus");
       status.textContent = !data.installed ? "Kea not installed" : (data.active ? "Running" : "Stopped");
       status.className = "badge " + (data.active ? "up" : "down");
