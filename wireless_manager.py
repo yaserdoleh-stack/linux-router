@@ -218,14 +218,29 @@ def apply(name, cfg, previous=None):
     old_config = config_path.read_bytes() if config_path.exists() else None
     network_path = _networkd_path(name)
     old_network = network_path.read_bytes() if network_path.exists() else None
+    # Stop the previous AP/client daemon before changing the interface mode.
+    # A previous AP bridge must be detached before starting a normal station.
+    previous = previous or {}
+    old_bridge = previous.get('bridge', '')
+    switching_to_client = cfg['enabled'] and cfg['mode'] == 'client'
     try:
-        if cfg['enabled'] and cfg['mode'] == 'client' and cfg['bridge']:
-            # Ordinary 3-address Wi-Fi stations cannot transparently join a bridge.
-            # Require 4-address support before changing networkd configuration.
-            result = subprocess.run(['iw', 'dev', name, 'set', '4addr', 'on'],
-                                    capture_output=True, text=True)
-            if result.returncode:
-                raise RuntimeError('Wi-Fi client bridging requires 4-address/WDS support: ' + result.stderr.strip())
+        if switching_to_client:
+            subprocess.run(['systemctl', 'stop', unit], check=False, capture_output=True, text=True)
+            if not cfg['bridge']:
+                # Best effort: this is harmless if the interface is already unbridged.
+                subprocess.run(['ip', 'link', 'set', 'dev', name, 'nomaster'],
+                               check=False, capture_output=True, text=True)
+                # Disable stale WDS mode only if the previous config used client bridging.
+                if previous.get('mode') == 'client' and old_bridge:
+                    subprocess.run(['iw', 'dev', name, 'set', '4addr', 'off'],
+                                   check=False, capture_output=True, text=True)
+            else:
+                # 4-address mode is required only for explicitly selected client bridging.
+                result = subprocess.run(['iw', 'dev', name, 'set', '4addr', 'on'],
+                                        capture_output=True, text=True)
+                if result.returncode:
+                    raise ValueError('Client bridging requires 4-address/WDS support. '
+                                     'Choose No bridge and DHCP or Static IP, or use compatible Wi-Fi hardware.')
         if cfg['enabled']:
             _atomic(config_path, _config(name, cfg))
             _atomic(unit_path, _unit(name, cfg['mode']), 0o644)
@@ -237,8 +252,8 @@ def apply(name, cfg, previous=None):
         subprocess.run(['networkctl', 'reload'], check=True, capture_output=True, text=True)
         subprocess.run(['systemctl', 'daemon-reload'], check=True, capture_output=True, text=True)
         if cfg['enabled']:
-            subprocess.run(['systemctl', 'enable', '--now', unit], check=True, capture_output=True, text=True)
             subprocess.run(['systemctl', 'reset-failed', unit], check=False, capture_output=True, text=True)
+            subprocess.run(['systemctl', 'enable', '--now', unit], check=True, capture_output=True, text=True)
             subprocess.run(['systemctl', 'restart', unit], check=True, capture_output=True, text=True)
             # systemctl restart can return before hostapd fails during radio
             # initialization. Poll briefly to detect immediate failures.

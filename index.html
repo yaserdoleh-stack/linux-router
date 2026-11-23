@@ -2365,7 +2365,7 @@
       document.getElementById("configFields").innerHTML =
         `<div class="form-group"><label>Current installed configuration (read-only)</label><div class="mono" style="padding:12px;border:1px solid var(--border,#555);border-radius:6px;line-height:1.8;white-space:pre-wrap">${escapeHtml(current.configured ? `Service: ${current.service_status} | ${current.enabled ? 'Enabled' : 'Disabled'}\nConfigured mode: ${current.mode || 'Unknown'} | Actual interface mode: ${current.interface_mode}\nSSID: ${current.ssid || '(none)'}\nBand: ${current.band || 'Unknown'} | Configured channel: ${current.channel ?? 'Unknown'}\nOperating channel: ${current.operating_channel ?? 'Not associated'} | Frequency: ${current.frequency_mhz ? current.frequency_mhz + ' MHz' : 'Unavailable'}\nPassword: ${current.password_configured ? 'Configured (hidden)' : 'Not configured'}` : `No installed wireless configuration. Service: ${current.service_status}; interface mode: ${current.interface_mode}`)}</div><small>Read from the installed wireless configuration and Linux interface status. Values below are the last applied Router Manager settings and may differ from the running configuration.</small></div>` +
         `<div class="form-group"><label>Interface state</label><select class="input" id="cfg_wifi_enabled" onchange="toggleWirelessMode()"><option value="true" ${data.enabled !== false ? "selected" : ""}>Enabled</option><option value="false" ${data.enabled === false ? "selected" : ""}>Disabled</option></select></div>` +
-        `<div class="form-group"><label>Wireless mode</label><select class="input" id="cfg_wifi_mode" onchange="toggleWirelessMode()"><option value="client" ${data.mode === 'client' ? 'selected' : ''}>Client (connect to Wi-Fi)</option><option value="access_point" ${data.mode === 'access_point' ? 'selected' : ''}>Access Point (provide Wi-Fi)</option></select></div>` +
+        `<div class="form-group"><label>Wireless mode</label><select class="input" id="cfg_wifi_mode" onchange="wirelessModeChanged()"><option value="client" ${data.mode === 'client' ? 'selected' : ''}>Client (connect to Wi-Fi)</option><option value="access_point" ${data.mode === 'access_point' ? 'selected' : ''}>Access Point (provide Wi-Fi)</option></select></div>` +
         `<div class="form-group"><small>${data.pending_changes ? 'Unapplied wireless changes exist. This form shows the last applied settings; saving will replace the pending settings for this interface.' : data.applied ? 'Showing last successfully applied wireless settings.' : 'No previously applied wireless configuration is saved.'}</small></div>` +
         field("SSID", "wifi_ssid", data.ssid || "") +
         `<div class="form-group"><label>WPA2 password</label><input class="input" type="password" id="cfg_wifi_password" autocomplete="new-password" placeholder="${data.password_configured ? 'Leave blank to keep current password' : '8–63 ASCII characters'}"><small>WPA2-Personal; password is not returned by the API.</small></div>` +
@@ -2386,6 +2386,16 @@
     const selected = preferred ?? select.value;
     select.innerHTML = `<option value="auto" ${selected === 'auto' || selected === 0 || selected === '0' ? 'selected' : ''}>Auto (ACS)</option>` + channels[band].map(c => `<option value="${c}" ${String(c) === String(selected) ? 'selected' : ''}>${c}</option>`).join('');
     document.getElementById("wifi_band_note").textContent = band === "6" ? "6 GHz client support depends on adapter; AP requires WPA3-SAE and is not yet supported." : "Available channels depend on adapter capabilities and regulatory domain.";
+  }
+  function wirelessModeChanged() {
+    const mode = cfg("wifi_mode");
+    const bridge = document.getElementById("cfg_wifi_bridge");
+    if (mode === "client" && bridge && bridge.value) {
+      bridge.value = ""; // AP bridge membership must not carry into client mode.
+      const ip = document.getElementById("cfg_wifi_address_mode");
+      if (ip && ip.value === "none") ip.value = "dhcp";
+    }
+    toggleWirelessMode();
   }
   function toggleWirelessMode() {
     const channel = document.getElementById("wifi_channel_group");
